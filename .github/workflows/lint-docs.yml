@@ -1,0 +1,17 @@
+name: Lint docs
+
+on:
+  pull_request:
+    paths:
+      - '**/*.md'
+      - '**/*.markdown'
+      - '.markdownlint.json'
+      - '.lycheeignore'
+      - '.github/workflows/markdown-lint.yml'
+      - '.github/workflows/lint-docs.yml'
+
+jobs:
+  lint:
+    uses: ./.github/workflows/markdown-lint.yml
+    with:
+      force-lint: true

@@ -1,0 +1,106 @@
+name: Reusable - Markdown Lint
+
+on:
+  workflow_call:
+    inputs:
+      glob:
+        description: "markdownlint-cli2 glob pattern(s); space-separated for multiple"
+        required: false
+        type: string
+        default: "**/*.md"
+      config-file:
+        description: "markdownlint configuration file (relative to repo root)"
+        required: false
+        type: string
+        default: ".markdownlint.json"
+      check-links:
+        description: "Run lychee link checker after markdownlint"
+        required: false
+        type: boolean
+        default: true
+      lychee-args:
+        description: "Extra CLI args for lychee"
+        required: false
+        type: string
+        default: "--exclude-mail --max-redirects 5 --accept 200..=204,429 --no-progress"
+      runs-on:
+        description: "Runner image"
+        required: false
+        type: string
+        default: "ubuntu-latest"
+      paths-filters:
+        description: |
+          dorny/paths-filter YAML; must define a `docs` filter that decides whether to lint.
+        required: false
+        type: string
+        default: |
+          docs:
+            - '**/*.md'
+            - '**/*.markdown'
+            - '.markdownlint.json'
+            - '.markdownlint.yaml'
+            - '.markdownlint.yml'
+            - '.lycheeignore'
+      force-lint:
+        description: "Skip the path filter and always lint"
+        required: false
+        type: boolean
+        default: false
+      repository-owner:
+        description: "Restrict execution to this owner (skip on forks). Empty disables the check."
+        required: false
+        type: string
+        default: "OneLiteFeatherNET"
+
+concurrency:
+  group: markdown-lint-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Detect markdown changes
+    if: ${{ inputs.repository-owner == '' || github.repository_owner == inputs.repository-owner }}
+    runs-on: ubuntu-latest
+    outputs:
+      docs: ${{ steps.filter.outputs.docs }}
+    steps:
+      - name: Filter changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: ${{ inputs.paths-filters }}
+
+      - name: Summary
+        run: |
+          echo "Docs-relevant changes detected: ${{ steps.filter.outputs.docs }}"
+          echo "force-lint input: ${{ inputs.force-lint }}"
+
+  markdownlint:
+    name: markdownlint
+    needs: changes
+    if: ${{ inputs.force-lint || needs.changes.outputs.docs == 'true' }}
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run markdownlint-cli2
+        uses: DavidAnson/markdownlint-cli2-action@v18
+        with:
+          globs: ${{ inputs.glob }}
+          config: ${{ inputs.config-file }}
+
+  link-check:
+    name: Lychee link check
+    needs: changes
+    if: ${{ inputs.check-links && (inputs.force-lint || needs.changes.outputs.docs == 'true') }}
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Lychee link checker
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: ${{ inputs.lychee-args }} ${{ inputs.glob }}
+          fail: true
