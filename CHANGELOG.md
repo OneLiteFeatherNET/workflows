@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.1](https://github.com/OneLiteFeatherNET/workflows/compare/v2.0.0...v2.0.1) (2026-05-11)
+
+
+### Bug Fixes
+
+* **gradle-build-pr:** deduplicate junit_files glob to avoid double-counted results ([#7](https://github.com/OneLiteFeatherNET/workflows/issues/7)) ([1f2b60d](https://github.com/OneLiteFeatherNET/workflows/commit/1f2b60d62bf35dd84bb129285c27089deb72fb7d))
+
 ## [2.0.0](https://github.com/OneLiteFeatherNET/workflows/compare/v1.0.0...v2.0.0) (2026-05-11)
 
 
