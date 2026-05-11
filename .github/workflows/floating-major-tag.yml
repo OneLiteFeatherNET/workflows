@@ -1,0 +1,70 @@
+name: Update floating major tag
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Semver tag to point the floating major at (e.g. v2.0.0). Leave empty on release events."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    name: Update floating major tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve source tag and major
+        id: resolve
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${INPUT_TAG:-$RELEASE_TAG}"
+          if [[ -z "$TAG" ]]; then
+            echo "::error::No tag provided (neither workflow_dispatch input nor release event)"
+            exit 1
+          fi
+          if [[ ! "$TAG" =~ ^v([0-9]+)\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '$TAG' is not a valid vMAJOR.MINOR.PATCH semver tag"
+            exit 1
+          fi
+          MAJOR="v${BASH_REMATCH[1]}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "major=$MAJOR" >> "$GITHUB_OUTPUT"
+          echo "Updating floating tag $MAJOR -> $TAG"
+
+      - name: Force-update floating major tag
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+          MAJOR: ${{ steps.resolve.outputs.major }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f "$MAJOR" "$TAG"
+          git push origin "$MAJOR" --force
+
+      - name: Summary
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+          MAJOR: ${{ steps.resolve.outputs.major }}
+        run: |
+          {
+            echo "### Floating major tag updated"
+            echo ""
+            echo "- Source tag: \`$TAG\`"
+            echo "- Floating tag: \`$MAJOR\` (now points to \`$TAG\`)"
+          } >> "$GITHUB_STEP_SUMMARY"
