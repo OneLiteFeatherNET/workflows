@@ -33,11 +33,6 @@ on:
         required: false
         type: boolean
         default: true
-      upload-reports:
-        description: "Upload build/test reports as an artifact on failure."
-        required: false
-        type: boolean
-        default: true
     secrets:
       ONELITEFEATHER_MAVEN_USERNAME:
         required: true
@@ -81,6 +76,8 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
+        with:
+          add-job-summary: 'always'
 
       - name: Build
         shell: bash
@@ -101,7 +98,7 @@ jobs:
           fi
 
       - name: Upload build reports
-        if: ${{ failure() && inputs.upload-reports }}
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: publish-reports-jdk${{ inputs.java-version }}

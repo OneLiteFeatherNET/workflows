@@ -22,7 +22,7 @@ on:
         description: "JSON array of runners to use as a matrix"
         required: false
         type: string
-        default: '["ubuntu-latest"]'
+        default: '["ubuntu-latest", "windows-latest", "macos-latest"]'
       repository-owner:
         description: "Restrict execution to this owner (skip on forks). Empty disables the check."
         required: false
@@ -61,11 +61,6 @@ on:
         required: false
         type: boolean
         default: false
-      upload-reports:
-        description: "Upload test reports as an artifact on failure."
-        required: false
-        type: boolean
-        default: true
     secrets:
       ONELITEFEATHER_MAVEN_USERNAME:
         required: false
@@ -134,6 +129,8 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
         with:
           cache-read-only: ${{ github.ref != format('refs/heads/{0}', github.event.repository.default_branch) }}
+          add-job-summary: 'on-failure'
+          add-job-summary-as-pr-comment: 'on-failure'
 
       - name: Run ${{ inputs.gradle-task }}
         shell: bash
@@ -145,7 +142,7 @@ jobs:
           fi
 
       - name: Upload test reports
-        if: ${{ failure() && inputs.upload-reports }}
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-reports-${{ matrix.os }}-jdk${{ inputs.java-version }}
@@ -154,3 +151,32 @@ jobs:
             **/build/test-results/**
           if-no-files-found: ignore
           retention-days: 14
+
+  test-report:
+    name: Aggregate test results
+    needs: build
+    if: ${{ always() && needs.build.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      pull-requests: write
+      contents: read
+    steps:
+      - name: Download all test reports
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: test-reports-*
+          merge-multiple: true
+
+      - name: Publish unit test results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: always()
+        with:
+          junit_files: |
+            artifacts/**/TEST-*.xml
+            artifacts/**/test-results/**/*.xml
+          check_name: "Test results"
+          comment_mode: changes in failures
+          report_individual_runs: true
+          fail_on: test failures
