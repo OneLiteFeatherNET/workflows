@@ -10,15 +10,25 @@ repositories by referencing a tagged release of this repo.
 
 | Workflow | Purpose |
 | --- | --- |
-| `.github/workflows/gradle-build-pr.yml` | Build & test a Gradle project on pull requests (matrix OS, configurable JDK). |
+| `.github/workflows/gradle-build-pr.yml` | Build & test a Gradle project on pull requests. Skips the build when no Gradle-relevant files changed; auto-enables verbose logging on debug re-runs. |
 | `.github/workflows/gradle-publish.yml` | Build & publish a Gradle project to the OneLiteFeather Maven repository on tag pushes. |
 | `.github/workflows/release-please.yml` | Run [release-please](https://github.com/googleapis/release-please) for a repository. |
 | `.github/workflows/close-invalid-prs.yml` | Close PRs opened from a fork's default branch with a configurable message. |
 
+## Defaults at a glance
+
+- Java **25** on Temurin.
+- Single `ubuntu-latest` runner (multi-OS opt-in via `runs-on`).
+- `gradle-build-pr` runs `build test` (no `clean`, to keep incremental caches).
+- Path filter: build only runs when files under `src/`, `*.gradle*`, `buildSrc/`, JVM sources, or `.github/workflows/**` changed.
+- Debug re-runs (`Re-run with debug logging`) automatically activate `--info --stacktrace`.
+- Test reports are uploaded as artifacts on failure (`upload-reports`).
+- Concurrency cancels superseded PR runs.
+
 ## Versioning
 
 This repository is released via [release-please](https://github.com/googleapis/release-please).
-Pin consumers to a tag (e.g. `@v1.0.0`) or a major (e.g. `@v1`) rather than
+Pin consumers to a tag (e.g. `@v2.0.0`) or a major (e.g. `@v2`) rather than
 `main` for reproducible builds.
 
 ## Usage examples
@@ -31,9 +41,35 @@ on: [pull_request]
 
 jobs:
   build:
-    uses: OneLiteFeatherNET/workflows/.github/workflows/gradle-build-pr.yml@v1
+    uses: OneLiteFeatherNET/workflows/.github/workflows/gradle-build-pr.yml@v2
+    secrets: inherit
+```
+
+Multi-OS matrix, custom JDK, force-build:
+
+```yaml
+jobs:
+  build:
+    uses: OneLiteFeatherNET/workflows/.github/workflows/gradle-build-pr.yml@v2
     with:
-      java-version: "25"
+      java-version: "21"
+      runs-on: '["ubuntu-latest", "windows-latest", "macos-latest"]'
+      force-build: true
+    secrets: inherit
+```
+
+Custom path filter (must define a `code:` key):
+
+```yaml
+jobs:
+  build:
+    uses: OneLiteFeatherNET/workflows/.github/workflows/gradle-build-pr.yml@v2
+    with:
+      paths-filters: |
+        code:
+          - 'src/**'
+          - 'build.gradle.kts'
+          - 'gradle/**'
     secrets: inherit
 ```
 
@@ -47,9 +83,7 @@ on:
 
 jobs:
   publish:
-    uses: OneLiteFeatherNET/workflows/.github/workflows/gradle-publish.yml@v1
-    with:
-      java-version: "21"
+    uses: OneLiteFeatherNET/workflows/.github/workflows/gradle-publish.yml@v2
     secrets: inherit
 ```
 
@@ -67,7 +101,7 @@ permissions:
 
 jobs:
   release:
-    uses: OneLiteFeatherNET/workflows/.github/workflows/release-please.yml@v1
+    uses: OneLiteFeatherNET/workflows/.github/workflows/release-please.yml@v2
 ```
 
 ### Close invalid PRs
@@ -80,7 +114,7 @@ on:
 
 jobs:
   close:
-    uses: OneLiteFeatherNET/workflows/.github/workflows/close-invalid-prs.yml@v1
+    uses: OneLiteFeatherNET/workflows/.github/workflows/close-invalid-prs.yml@v2
     with:
       protected-branch: main
 ```
@@ -94,9 +128,17 @@ these secrets to be available in the caller repository (and forwarded via
 - `ONELITEFEATHER_MAVEN_USERNAME`
 - `ONELITEFEATHER_MAVEN_PASSWORD`
 
+## Debugging
+
+When a workflow run fails, press **Re-run with debug logging** in the GitHub UI.
+The reusable workflows detect `RUNNER_DEBUG=1` automatically and switch Gradle
+to `--info --stacktrace` for full output. Test reports are also attached as
+artifacts on failed runs (`test-reports-<os>-jdk<version>`).
+
 ## Contributing
 
 - Conventional Commits are required (`feat:`, `fix:`, `chore:`, ...).
+- Breaking changes use `feat!:` or `BREAKING CHANGE:` to trigger a major bump.
 - Releases are produced automatically by release-please on merge to `main`.
 
 ## License

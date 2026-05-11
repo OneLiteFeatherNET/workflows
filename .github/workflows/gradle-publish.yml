@@ -7,7 +7,7 @@ on:
         description: "JDK version to use"
         required: false
         type: string
-        default: "21"
+        default: "25"
       java-distribution:
         description: "JDK distribution (temurin, zulu, ...)"
         required: false
@@ -33,11 +33,20 @@ on:
         required: false
         type: boolean
         default: true
+      upload-reports:
+        description: "Upload build/test reports as an artifact on failure."
+        required: false
+        type: boolean
+        default: true
     secrets:
       ONELITEFEATHER_MAVEN_USERNAME:
         required: true
       ONELITEFEATHER_MAVEN_PASSWORD:
         required: true
+
+concurrency:
+  group: gradle-publish-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   publish:
@@ -46,9 +55,19 @@ jobs:
     env:
       ONELITEFEATHER_MAVEN_USERNAME: ${{ secrets.ONELITEFEATHER_MAVEN_USERNAME }}
       ONELITEFEATHER_MAVEN_PASSWORD: ${{ secrets.ONELITEFEATHER_MAVEN_PASSWORD }}
+      GRADLE_OPTS: "-Dorg.gradle.parallel=true -Dorg.gradle.caching=true -Dorg.gradle.welcome=never"
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Toolchain info
+        shell: bash
+        run: |
+          echo "Runner       : ${{ runner.os }} ${{ runner.arch }}"
+          echo "JDK target   : ${{ inputs.java-version }} (${{ inputs.java-distribution }})"
+          echo "Build task   : ${{ inputs.build-task }}"
+          echo "Publish task : ${{ inputs.publish-task }}"
+          echo "Debug logging: ${{ runner.debug }}"
 
       - name: Validate Gradle wrapper
         if: ${{ inputs.validate-wrapper }}
@@ -64,7 +83,30 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
 
       - name: Build
-        run: ./gradlew ${{ inputs.build-task }}
+        shell: bash
+        run: |
+          if [ "${RUNNER_DEBUG:-0}" = "1" ]; then
+            ./gradlew ${{ inputs.build-task }} --info --stacktrace
+          else
+            ./gradlew ${{ inputs.build-task }}
+          fi
 
       - name: Publish
-        run: ./gradlew ${{ inputs.publish-task }}
+        shell: bash
+        run: |
+          if [ "${RUNNER_DEBUG:-0}" = "1" ]; then
+            ./gradlew ${{ inputs.publish-task }} --info --stacktrace
+          else
+            ./gradlew ${{ inputs.publish-task }}
+          fi
+
+      - name: Upload build reports
+        if: ${{ failure() && inputs.upload-reports }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: publish-reports-jdk${{ inputs.java-version }}
+          path: |
+            **/build/reports/**
+            **/build/test-results/**
+          if-no-files-found: ignore
+          retention-days: 14

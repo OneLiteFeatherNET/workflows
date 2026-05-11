@@ -7,7 +7,7 @@ on:
         description: "JDK version to use"
         required: false
         type: string
-        default: "21"
+        default: "25"
       java-distribution:
         description: "JDK distribution (temurin, zulu, ...)"
         required: false
@@ -17,12 +17,12 @@ on:
         description: "Gradle task(s) to run"
         required: false
         type: string
-        default: "clean build test"
+        default: "build test"
       runs-on:
         description: "JSON array of runners to use as a matrix"
         required: false
         type: string
-        default: '["ubuntu-latest", "windows-latest", "macos-latest"]'
+        default: '["ubuntu-latest"]'
       repository-owner:
         description: "Restrict execution to this owner (skip on forks). Empty disables the check."
         required: false
@@ -33,16 +33,72 @@ on:
         required: false
         type: boolean
         default: true
+      paths-filters:
+        description: |
+          dorny/paths-filter YAML defining when to build. Must define a `code`
+          filter; the build runs when `code` matches.
+        required: false
+        type: string
+        default: |
+          code:
+            - '**/*.gradle'
+            - '**/*.gradle.kts'
+            - '**/gradle.properties'
+            - 'gradle/**'
+            - 'gradlew'
+            - 'gradlew.bat'
+            - 'settings.gradle'
+            - 'settings.gradle.kts'
+            - 'buildSrc/**'
+            - 'src/**'
+            - '**/*.java'
+            - '**/*.kt'
+            - '**/*.groovy'
+            - '**/*.scala'
+            - '.github/workflows/**'
+      force-build:
+        description: "Skip the path filter and always build."
+        required: false
+        type: boolean
+        default: false
+      upload-reports:
+        description: "Upload test reports as an artifact on failure."
+        required: false
+        type: boolean
+        default: true
     secrets:
       ONELITEFEATHER_MAVEN_USERNAME:
         required: false
       ONELITEFEATHER_MAVEN_PASSWORD:
         required: false
 
+concurrency:
+  group: gradle-build-pr-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  changes:
+    name: Detect changes
+    if: ${{ inputs.repository-owner == '' || github.repository_owner == inputs.repository-owner }}
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - name: Filter changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: ${{ inputs.paths-filters }}
+
+      - name: Summary
+        run: |
+          echo "Code-relevant changes detected: ${{ steps.filter.outputs.code }}"
+          echo "force-build input: ${{ inputs.force-build }}"
+
   build:
     name: Build (${{ matrix.os }})
-    if: ${{ inputs.repository-owner == '' || github.repository_owner == inputs.repository-owner }}
+    needs: changes
+    if: ${{ inputs.force-build || needs.changes.outputs.code == 'true' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -51,9 +107,18 @@ jobs:
     env:
       ONELITEFEATHER_MAVEN_USERNAME: ${{ secrets.ONELITEFEATHER_MAVEN_USERNAME }}
       ONELITEFEATHER_MAVEN_PASSWORD: ${{ secrets.ONELITEFEATHER_MAVEN_PASSWORD }}
+      GRADLE_OPTS: "-Dorg.gradle.parallel=true -Dorg.gradle.caching=true -Dorg.gradle.welcome=never"
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Toolchain info
+        shell: bash
+        run: |
+          echo "Runner       : ${{ runner.os }} ${{ runner.arch }}"
+          echo "JDK target   : ${{ inputs.java-version }} (${{ inputs.java-distribution }})"
+          echo "Gradle task  : ${{ inputs.gradle-task }}"
+          echo "Debug logging: ${{ runner.debug }}"
 
       - name: Validate Gradle wrapper
         if: ${{ inputs.validate-wrapper }}
@@ -67,6 +132,25 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: ${{ github.ref != format('refs/heads/{0}', github.event.repository.default_branch) }}
 
-      - name: Run ${{ inputs.gradle-task }} on ${{ matrix.os }}
-        run: ./gradlew ${{ inputs.gradle-task }}
+      - name: Run ${{ inputs.gradle-task }}
+        shell: bash
+        run: |
+          if [ "${RUNNER_DEBUG:-0}" = "1" ]; then
+            ./gradlew ${{ inputs.gradle-task }} --info --stacktrace
+          else
+            ./gradlew ${{ inputs.gradle-task }}
+          fi
+
+      - name: Upload test reports
+        if: ${{ failure() && inputs.upload-reports }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ matrix.os }}-jdk${{ inputs.java-version }}
+          path: |
+            **/build/reports/tests/**
+            **/build/test-results/**
+          if-no-files-found: ignore
+          retention-days: 14
