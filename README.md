@@ -14,6 +14,7 @@ repositories by referencing a tagged release of this repo.
 | `.github/workflows/gradle-publish.yml` | Build & publish a Gradle project to the OneLiteFeather Maven repository on tag pushes. |
 | `.github/workflows/release-please.yml` | Run [release-please](https://github.com/googleapis/release-please) for a repository. |
 | `.github/workflows/close-invalid-prs.yml` | Close PRs opened from a fork's default branch with a configurable message. |
+| `.github/workflows/markdown-lint.yml` | Lint Markdown files with [`markdownlint-cli2`](https://github.com/DavidAnson/markdownlint-cli2-action) and check links with [`lychee`](https://github.com/lycheeverse/lychee-action). |
 
 ## Defaults at a glance
 
@@ -24,6 +25,7 @@ repositories by referencing a tagged release of this repo.
 - Debug re-runs (`Re-run with debug logging`) automatically activate `--info --stacktrace`.
 - Test reports are uploaded as artifacts on every run and aggregated into a unified check + PR comment.
 - Concurrency cancels superseded PR runs; publish runs are never cancelled mid-flight.
+- `markdown-lint` filters on `.md`/`.markdownlint*`/`.lycheeignore` paths and runs markdownlint + lychee in parallel.
 
 ## Versioning
 
@@ -124,6 +126,27 @@ jobs:
     with:
       protected-branch: main
 ```
+
+### Markdown lint
+
+```yaml
+name: Lint docs
+on:
+  pull_request:
+    paths:
+      - '**/*.md'
+      - '.markdownlint.json'
+      - '.lycheeignore'
+
+jobs:
+  lint:
+    uses: OneLiteFeatherNET/workflows/.github/workflows/markdown-lint.yml@v2
+    with:
+      force-lint: true
+```
+
+A `.markdownlint.json` and optional `.lycheeignore` (regex per line) at the
+repo root configure rules and skip-lists.
 
 ## Required secrets
 
