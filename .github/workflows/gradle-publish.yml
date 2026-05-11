@@ -1,0 +1,70 @@
+name: Reusable - Gradle Publish
+
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        description: "JDK version to use"
+        required: false
+        type: string
+        default: "21"
+      java-distribution:
+        description: "JDK distribution (temurin, zulu, ...)"
+        required: false
+        type: string
+        default: "temurin"
+      runs-on:
+        description: "Runner image"
+        required: false
+        type: string
+        default: "ubuntu-latest"
+      build-task:
+        description: "Gradle task(s) used for the build step before publishing"
+        required: false
+        type: string
+        default: "build"
+      publish-task:
+        description: "Gradle task(s) used for publishing"
+        required: false
+        type: string
+        default: "publish"
+      validate-wrapper:
+        description: "Run gradle wrapper validation before building"
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      ONELITEFEATHER_MAVEN_USERNAME:
+        required: true
+      ONELITEFEATHER_MAVEN_PASSWORD:
+        required: true
+
+jobs:
+  publish:
+    name: Build & publish
+    runs-on: ${{ inputs.runs-on }}
+    env:
+      ONELITEFEATHER_MAVEN_USERNAME: ${{ secrets.ONELITEFEATHER_MAVEN_USERNAME }}
+      ONELITEFEATHER_MAVEN_PASSWORD: ${{ secrets.ONELITEFEATHER_MAVEN_PASSWORD }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Validate Gradle wrapper
+        if: ${{ inputs.validate-wrapper }}
+        uses: gradle/actions/wrapper-validation@v6
+
+      - name: Set up JDK ${{ inputs.java-version }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: ${{ inputs.java-distribution }}
+          java-version: ${{ inputs.java-version }}
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Build
+        run: ./gradlew ${{ inputs.build-task }}
+
+      - name: Publish
+        run: ./gradlew ${{ inputs.publish-task }}

@@ -1,0 +1,72 @@
+name: Reusable - Gradle Build PR
+
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        description: "JDK version to use"
+        required: false
+        type: string
+        default: "21"
+      java-distribution:
+        description: "JDK distribution (temurin, zulu, ...)"
+        required: false
+        type: string
+        default: "temurin"
+      gradle-task:
+        description: "Gradle task(s) to run"
+        required: false
+        type: string
+        default: "clean build test"
+      runs-on:
+        description: "JSON array of runners to use as a matrix"
+        required: false
+        type: string
+        default: '["ubuntu-latest", "windows-latest", "macos-latest"]'
+      repository-owner:
+        description: "Restrict execution to this owner (skip on forks). Empty disables the check."
+        required: false
+        type: string
+        default: "OneLiteFeatherNET"
+      validate-wrapper:
+        description: "Run gradle wrapper validation before building"
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      ONELITEFEATHER_MAVEN_USERNAME:
+        required: false
+      ONELITEFEATHER_MAVEN_PASSWORD:
+        required: false
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    if: ${{ inputs.repository-owner == '' || github.repository_owner == inputs.repository-owner }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.runs-on) }}
+    env:
+      ONELITEFEATHER_MAVEN_USERNAME: ${{ secrets.ONELITEFEATHER_MAVEN_USERNAME }}
+      ONELITEFEATHER_MAVEN_PASSWORD: ${{ secrets.ONELITEFEATHER_MAVEN_PASSWORD }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Validate Gradle wrapper
+        if: ${{ inputs.validate-wrapper }}
+        uses: gradle/actions/wrapper-validation@v6
+
+      - name: Set up JDK ${{ inputs.java-version }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: ${{ inputs.java-distribution }}
+          java-version: ${{ inputs.java-version }}
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Run ${{ inputs.gradle-task }} on ${{ matrix.os }}
+        run: ./gradlew ${{ inputs.gradle-task }}
