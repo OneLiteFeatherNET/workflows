@@ -1,0 +1,2 @@
+# Internal/private hosts that lychee cannot reach from GitHub-hosted runners.
+^https://outline\.onelitefeather\.dev/.*
