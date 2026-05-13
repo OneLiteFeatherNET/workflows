@@ -14,10 +14,21 @@ on:
         type: string
         default: "temurin"
       gradle-task:
-        description: "Gradle task(s) to run"
+        description: |
+          Gradle task(s) to run. Leave empty to use a default that depends on
+          `run-tests`: `build test` when tests exist, `build` otherwise.
         required: false
         type: string
-        default: "build test"
+        default: ""
+      run-tests:
+        description: |
+          Whether the project has a JVM test suite. When `false` the workflow
+          skips the JUnit upload and aggregation steps, and the default
+          `gradle-task` falls back to `build` (suitable for BOM-only or
+          test-less projects).
+        required: false
+        type: boolean
+        default: true
       runs-on:
         description: "JSON array of runners to use as a matrix"
         required: false
@@ -103,6 +114,7 @@ jobs:
       ONELITEFEATHER_MAVEN_USERNAME: ${{ secrets.ONELITEFEATHER_MAVEN_USERNAME }}
       ONELITEFEATHER_MAVEN_PASSWORD: ${{ secrets.ONELITEFEATHER_MAVEN_PASSWORD }}
       GRADLE_OPTS: "-Dorg.gradle.parallel=true -Dorg.gradle.caching=true -Dorg.gradle.welcome=never"
+      RESOLVED_GRADLE_TASK: ${{ inputs.gradle-task != '' && inputs.gradle-task || (inputs.run-tests && 'build test' || 'build') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -112,7 +124,8 @@ jobs:
         run: |
           echo "Runner       : ${{ runner.os }} ${{ runner.arch }}"
           echo "JDK target   : ${{ inputs.java-version }} (${{ inputs.java-distribution }})"
-          echo "Gradle task  : ${{ inputs.gradle-task }}"
+          echo "Gradle task  : ${RESOLVED_GRADLE_TASK}"
+          echo "Run tests    : ${{ inputs.run-tests }}"
           echo "Debug logging: ${{ runner.debug }}"
 
       - name: Validate Gradle wrapper
@@ -132,17 +145,17 @@ jobs:
           add-job-summary: 'on-failure'
           add-job-summary-as-pr-comment: 'on-failure'
 
-      - name: Run ${{ inputs.gradle-task }}
+      - name: Run Gradle (${{ env.RESOLVED_GRADLE_TASK }})
         shell: bash
         run: |
           if [ "${RUNNER_DEBUG:-0}" = "1" ]; then
-            ./gradlew ${{ inputs.gradle-task }} --info --stacktrace
+            ./gradlew ${RESOLVED_GRADLE_TASK} --info --stacktrace
           else
-            ./gradlew ${{ inputs.gradle-task }}
+            ./gradlew ${RESOLVED_GRADLE_TASK}
           fi
 
       - name: Upload test reports
-        if: always()
+        if: ${{ always() && inputs.run-tests }}
         uses: actions/upload-artifact@v4
         with:
           name: test-reports-${{ matrix.os }}-jdk${{ inputs.java-version }}
@@ -155,7 +168,7 @@ jobs:
   test-report:
     name: Aggregate test results
     needs: build
-    if: ${{ always() && needs.build.result != 'skipped' }}
+    if: ${{ always() && needs.build.result != 'skipped' && inputs.run-tests }}
     runs-on: ubuntu-latest
     permissions:
       checks: write

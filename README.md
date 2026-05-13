@@ -20,7 +20,7 @@ repositories by referencing a tagged release of this repo.
 
 - Java **25** on Temurin.
 - Three-OS matrix on PRs: `ubuntu-latest`, `windows-latest`, `macos-latest`.
-- `gradle-build-pr` runs `build test` (no `clean`, to keep incremental caches).
+- `gradle-build-pr` runs `build test` by default (no `clean`, to keep incremental caches). Set `run-tests: false` for BOM-only / test-less projects: the default task drops to `build` and the JUnit aggregation step is skipped.
 - Path filter: build only runs when files under `src/`, `*.gradle*`, `buildSrc/`, JVM sources, or `.github/workflows/**` changed.
 - Debug re-runs (`Re-run with debug logging`) automatically activate `--info --stacktrace`.
 - Test reports are uploaded as artifacts on every run and aggregated into a unified check + PR comment.
@@ -63,6 +63,17 @@ jobs:
       java-version: "21"
       runs-on: '["ubuntu-latest"]'
       force-build: true
+    secrets: inherit
+```
+
+BOM-only or test-less project:
+
+```yaml
+jobs:
+  build:
+    uses: OneLiteFeatherNET/workflows/.github/workflows/gradle-build-pr.yml@v2
+    with:
+      run-tests: false
     secrets: inherit
 ```
 
