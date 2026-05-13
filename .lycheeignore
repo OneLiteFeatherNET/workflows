@@ -1,2 +1,5 @@
 # Internal/private hosts that lychee cannot reach from GitHub-hosted runners.
 ^https://outline\.onelitefeather\.dev/.*
+
+# Cloudflare/bot-protection returns 403 to lychee but the page is healthy in browsers.
+^https://docs\.renovatebot\.com/.*
