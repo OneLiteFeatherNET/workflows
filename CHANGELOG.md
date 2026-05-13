@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.0](https://github.com/OneLiteFeatherNET/workflows/compare/v2.0.1...v2.1.0) (2026-05-13)
+
+
+### Features
+
+* **gradle-build-pr:** add run-tests flag for BOM and test-less projects ([#10](https://github.com/OneLiteFeatherNET/workflows/issues/10)) ([3508e38](https://github.com/OneLiteFeatherNET/workflows/commit/3508e382105bc7e5dcf551cf1fe57b684358e816))
+
 ## [2.0.1](https://github.com/OneLiteFeatherNET/workflows/compare/v2.0.0...v2.0.1) (2026-05-11)
 
 
