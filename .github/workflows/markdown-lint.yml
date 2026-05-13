@@ -22,7 +22,7 @@ on:
         description: "Extra CLI args for lychee"
         required: false
         type: string
-        default: "--exclude-mail --max-redirects 5 --accept 200..=204,429 --no-progress"
+        default: "--max-redirects 5 --accept 200..=204,429 --no-progress"
       runs-on:
         description: "Runner image"
         required: false
