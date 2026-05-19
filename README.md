@@ -1,7 +1,7 @@
 # OneLiteFeatherNET Reusable Workflows
 
 Central collection of reusable GitHub Actions workflows shared across
-OneLiteFeatherNET repositories (Butterfly, Aonyx-bom, ...).
+OneLiteFeatherNET repositories (Butterfly, Aonyx-bom, Titan, ...).
 
 Each workflow is exposed via `workflow_call` and consumed from downstream
 repositories by referencing a tagged release of this repo.
@@ -30,16 +30,21 @@ repositories by referencing a tagged release of this repo.
 ## Versioning
 
 This repository is released via [release-please](https://github.com/googleapis/release-please).
-Pin consumers to a tag (e.g. `@v2.0.0`) or a major (e.g. `@v2`) rather than
-`main` for reproducible builds.
+Pin consumers to a concrete tag (e.g. `@v2.0.1`) rather than `main` for
+reproducible builds. There is intentionally no floating major alias such as
+`@v2` — consumers pin to a full `vX.Y.Z` and let Renovate bump them.
 
 Use [Renovate](https://docs.renovatebot.com/modules/manager/github-actions/) in
 your consumer repository to auto-bump the version pin. The `github-actions`
-manager picks up `uses: OneLiteFeatherNET/workflows/.github/workflows/foo.yml@vX`
+manager picks up `uses: OneLiteFeatherNET/workflows/.github/workflows/foo.yml@vX.Y.Z`
 out of the box. A sample `renovate.json` is shipped at the root of this repo;
 copy it as a starting point.
 
 ## Usage examples
+
+> All examples use the current latest tag `v2.0.1`. Substitute the freshest
+> release (see [Releases](https://github.com/OneLiteFeatherNET/workflows/releases))
+> or rely on Renovate to bump.
 
 ### Build a PR (Gradle)
 
@@ -49,7 +54,7 @@ on: [pull_request]
 
 jobs:
   build:
-    uses: OneLiteFeatherNET/workflows/.github/workflows/gradle-build-pr.yml@v2
+    uses: OneLiteFeatherNET/workflows/.github/workflows/gradle-build-pr.yml@v2.0.1
     secrets: inherit
 ```
 
@@ -58,7 +63,7 @@ Single-OS, custom JDK, force-build:
 ```yaml
 jobs:
   build:
-    uses: OneLiteFeatherNET/workflows/.github/workflows/gradle-build-pr.yml@v2
+    uses: OneLiteFeatherNET/workflows/.github/workflows/gradle-build-pr.yml@v2.0.1
     with:
       java-version: "21"
       runs-on: '["ubuntu-latest"]'
@@ -82,7 +87,7 @@ Custom path filter (must define a `code:` key):
 ```yaml
 jobs:
   build:
-    uses: OneLiteFeatherNET/workflows/.github/workflows/gradle-build-pr.yml@v2
+    uses: OneLiteFeatherNET/workflows/.github/workflows/gradle-build-pr.yml@v2.0.1
     with:
       paths-filters: |
         code:
@@ -102,7 +107,7 @@ on:
 
 jobs:
   publish:
-    uses: OneLiteFeatherNET/workflows/.github/workflows/gradle-publish.yml@v2
+    uses: OneLiteFeatherNET/workflows/.github/workflows/gradle-publish.yml@v2.0.1
     secrets: inherit
 ```
 
@@ -120,7 +125,7 @@ permissions:
 
 jobs:
   release:
-    uses: OneLiteFeatherNET/workflows/.github/workflows/release-please.yml@v2
+    uses: OneLiteFeatherNET/workflows/.github/workflows/release-please.yml@v2.0.1
 ```
 
 ### Close invalid PRs
@@ -133,7 +138,7 @@ on:
 
 jobs:
   close:
-    uses: OneLiteFeatherNET/workflows/.github/workflows/close-invalid-prs.yml@v2
+    uses: OneLiteFeatherNET/workflows/.github/workflows/close-invalid-prs.yml@v2.0.1
     with:
       protected-branch: main
 ```
@@ -151,7 +156,7 @@ on:
 
 jobs:
   lint:
-    uses: OneLiteFeatherNET/workflows/.github/workflows/markdown-lint.yml@v2
+    uses: OneLiteFeatherNET/workflows/.github/workflows/markdown-lint.yml@v2.0.1
     with:
       force-lint: true
 ```
@@ -173,7 +178,9 @@ these secrets to be available in the caller repository (and forwarded via
 For `gradle-build-pr`, JUnit XML from every matrix job is uploaded as
 `test-reports-<os>-jdk<version>` and merged by a downstream `test-report` job
 that uses [`EnricoMi/publish-unit-test-result-action`](https://github.com/marketplace/actions/publish-test-results)
-to post a unified check and PR comment.
+to post a unified check and PR comment. Each matrix runner's artifact extracts
+into its own subdirectory so identically-named JUnit XML files from different
+OSes never collide during aggregation.
 
 ## Debugging
 
@@ -188,6 +195,10 @@ posted to the run summary and as PR comments via
 - Conventional Commits are required (`feat:`, `fix:`, `chore:`, ...).
 - Breaking changes use `feat!:` or `BREAKING CHANGE:` to trigger a major bump.
 - Releases are produced automatically by release-please on merge to `main`.
+- **PR titles must also be conventional** — GitHub uses the PR title as the
+  squash-merge commit subject, and release-please only picks up commits with a
+  proper Conventional prefix. A non-conventional squash title (e.g.
+  `Remove merge-multiple option`) silently skips the release.
 
 ## License
 
