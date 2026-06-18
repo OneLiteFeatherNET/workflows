@@ -12,6 +12,7 @@ repositories by referencing a tagged release of this repo.
 | --- | --- |
 | `.github/workflows/gradle-build-pr.yml` | Build & test a Gradle project on pull requests across a runner matrix. Skips when no Gradle-relevant files changed; aggregates JUnit results across the matrix; auto-enables verbose logging on debug re-runs. |
 | `.github/workflows/gradle-publish.yml` | Build & publish a Gradle project to the OneLiteFeather Maven repository on tag pushes. |
+| `.github/workflows/docker-publish.yml` | Build a container image and push it to the OneLiteFeather Harbor registry using **chunked blob uploads** (via [`regctl`](https://regclient.org/)) so no single request exceeds the proxy body limit; optionally signs the image with cosign. |
 | `.github/workflows/release-please.yml` | Run [release-please](https://github.com/googleapis/release-please) for a repository. |
 | `.github/workflows/close-invalid-prs.yml` | Close PRs opened from a fork's default branch with a configurable message. |
 | `.github/workflows/markdown-lint.yml` | Lint Markdown files with [`markdownlint-cli2`](https://github.com/DavidAnson/markdownlint-cli2-action) and check links with [`lychee`](https://github.com/lycheeverse/lychee-action). |
@@ -106,6 +107,53 @@ jobs:
     secrets: inherit
 ```
 
+### Publish a Docker image (chunked upload)
+
+Pushes the image one blob at a time in chunks below the proxy body limit, so
+large layers no longer fail with `413 Request Entity Too Large` / `504 Gateway
+Timeout` behind a proxy such as Cloudflare (100 MB limit). Plain `docker push`
+/ `buildx` cannot chunk a blob; this workflow builds the image to an OCI archive
+and pushes it with [`regctl`](https://regclient.org/) (`--blob-chunk` /
+`--blob-max`) instead.
+
+Typical use is from a release job, gated on `release_created`:
+
+```yaml
+jobs:
+  docker:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    uses: OneLiteFeatherNET/workflows/.github/workflows/docker-publish.yml@v2
+    with:
+      image-name: "otis/otis"          # registry host comes from HARBOR_REGISTRY
+      version: ${{ needs.release-please.outputs.version }}
+      # Build the container context with Gradle first ($VERSION is exported):
+      setup-java: true
+      build-command: "./gradlew jar optimizedBuildLayers optimizedDockerfile -Pversion=$VERSION"
+      context: "./backend/build/docker/optimized"
+    secrets: inherit
+```
+
+For a project with a plain `Dockerfile` checked into the repo, drop the Gradle
+inputs:
+
+```yaml
+jobs:
+  docker:
+    uses: OneLiteFeatherNET/workflows/.github/workflows/docker-publish.yml@v2
+    with:
+      image-name: "myteam/myapp"
+      version: "1.2.3"
+      context: "."
+      sign: false                      # skip cosign if no signing key
+    secrets: inherit
+```
+
+Default tags are `{{version}}`, `{{major}}.{{minor}}`, `{{major}}` and a
+`sha-` tag; add more via `extra-tags`. Tune the chunk size with `blob-chunk`
+(bytes, default 50 MiB). The pushed manifest `digest` and full `image`
+reference are exposed as workflow outputs.
+
 ### release-please
 
 ```yaml
@@ -167,6 +215,14 @@ these secrets to be available in the caller repository (and forwarded via
 
 - `ONELITEFEATHER_MAVEN_USERNAME`
 - `ONELITEFEATHER_MAVEN_PASSWORD`
+
+`docker-publish` pushes to the Harbor registry and (optionally) signs with
+cosign, so it expects:
+
+- `HARBOR_REGISTRY` — registry host (no scheme), e.g. `harbor.onelitefeather.dev`
+- `HARBOR_USERNAME`
+- `HARBOR_PASSWORD`
+- `COSIGN_KEY` / `COSIGN_PASSWORD` — only when `sign: true` (the default)
 
 ## Test results
 

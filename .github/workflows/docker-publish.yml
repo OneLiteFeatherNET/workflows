@@ -1,0 +1,232 @@
+name: Reusable - Docker Publish (chunked)
+
+# Builds a container image and pushes it to the OneLiteFeather Harbor registry
+# using chunked blob uploads via regctl. This avoids the "request entity too
+# large" / 504 gateway timeout failures that occur when a single image layer
+# exceeds the request-body limit of a proxy in front of the registry (e.g. the
+# 100 MB Cloudflare limit): blobs larger than `blob-chunk` are split into
+# multiple smaller PATCH requests instead of one monolithic PUT.
+
+on:
+  workflow_call:
+    inputs:
+      image-name:
+        description: "Image repository path inside the registry, e.g. 'otis/otis' (the registry host comes from the HARBOR_REGISTRY secret)"
+        required: true
+        type: string
+      version:
+        description: "Version/tag of the image, e.g. '1.13.1' (without a leading 'v')"
+        required: true
+        type: string
+      context:
+        description: "Docker build context directory"
+        required: false
+        type: string
+        default: "."
+      dockerfile:
+        description: "Path to the Dockerfile (defaults to <context>/Dockerfile)"
+        required: false
+        type: string
+        default: ""
+      build-command:
+        description: "Optional shell command run before the docker build to produce the context (e.g. a Gradle task). The version is available as $VERSION."
+        required: false
+        type: string
+        default: ""
+      setup-java:
+        description: "Set up JDK + Gradle before running build-command (for Gradle-produced contexts)"
+        required: false
+        type: boolean
+        default: false
+      java-version:
+        description: "JDK version to use when setup-java is true"
+        required: false
+        type: string
+        default: "25"
+      java-distribution:
+        description: "JDK distribution (temurin, zulu, ...)"
+        required: false
+        type: string
+        default: "temurin"
+      extra-tags:
+        description: "Additional docker/metadata-action tag lines appended to the default semver + sha tags"
+        required: false
+        type: string
+        default: ""
+      blob-chunk:
+        description: "Chunk size in bytes for blob uploads above which chunked push is used (default 50 MiB, safely below a 100 MB proxy limit)"
+        required: false
+        type: string
+        default: "52428800"
+      sign:
+        description: "Sign the pushed image with cosign (requires COSIGN_KEY / COSIGN_PASSWORD secrets)"
+        required: false
+        type: boolean
+        default: true
+      regctl-version:
+        description: "regctl release tag to install"
+        required: false
+        type: string
+        default: "v0.8.2"
+      runs-on:
+        description: "Runner image"
+        required: false
+        type: string
+        default: "ubuntu-latest"
+    secrets:
+      HARBOR_REGISTRY:
+        required: true
+      HARBOR_USERNAME:
+        required: true
+      HARBOR_PASSWORD:
+        required: true
+      COSIGN_KEY:
+        required: false
+      COSIGN_PASSWORD:
+        required: false
+    outputs:
+      image:
+        description: "Fully qualified image reference (registry/image-name)"
+        value: ${{ jobs.docker.outputs.image }}
+      digest:
+        description: "Manifest digest of the pushed image"
+        value: ${{ jobs.docker.outputs.digest }}
+
+concurrency:
+  group: docker-publish-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  docker:
+    name: Build & push (chunked)
+    runs-on: ${{ inputs.runs-on }}
+    outputs:
+      image: ${{ steps.vars.outputs.image }}
+      digest: ${{ steps.push.outputs.digest }}
+    env:
+      VERSION: ${{ inputs.version }}
+      BLOB_CHUNK: ${{ inputs.blob-chunk }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve image reference
+        id: vars
+        shell: bash
+        env:
+          HARBOR_REGISTRY: ${{ secrets.HARBOR_REGISTRY }}
+          IMAGE_NAME: ${{ inputs.image-name }}
+        run: |
+          echo "image=${HARBOR_REGISTRY}/${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate Gradle wrapper
+        if: ${{ inputs.setup-java }}
+        uses: gradle/actions/wrapper-validation@v6
+
+      - name: Set up JDK ${{ inputs.java-version }}
+        if: ${{ inputs.setup-java }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: ${{ inputs.java-distribution }}
+          java-version: ${{ inputs.java-version }}
+
+      - name: Setup Gradle
+        if: ${{ inputs.setup-java }}
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Build context
+        if: ${{ inputs.build-command != '' }}
+        shell: bash
+        run: ${{ inputs.build-command }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: |
+            ${{ steps.vars.outputs.image }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ inputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
+            type=semver,pattern={{major}},value=${{ inputs.version }}
+            type=sha
+            ${{ inputs.extra-tags }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build image to OCI archive
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile != '' && inputs.dockerfile || format('{0}/Dockerfile', inputs.context) }}
+          push: false
+          provenance: false
+          sbom: false
+          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.vars.outputs.image }}:${{ inputs.version }}
+          outputs: type=oci,dest=${{ runner.temp }}/image.tar
+
+      - name: Install regctl
+        shell: bash
+        run: |
+          curl -fsSL "https://github.com/regclient/regclient/releases/download/${{ inputs.regctl-version }}/regctl-linux-amd64" \
+            -o "${RUNNER_TEMP}/regctl"
+          chmod +x "${RUNNER_TEMP}/regctl"
+          echo "${RUNNER_TEMP}" >> "$GITHUB_PATH"
+
+      - name: Configure chunked uploads and login
+        shell: bash
+        env:
+          HARBOR_REGISTRY: ${{ secrets.HARBOR_REGISTRY }}
+          HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+        run: |
+          regctl registry set --blob-chunk "${BLOB_CHUNK}" --blob-max "${BLOB_CHUNK}" "${HARBOR_REGISTRY}"
+          printf '%s' "${HARBOR_PASSWORD}" | \
+            regctl registry login "${HARBOR_REGISTRY}" -u "${HARBOR_USERNAME}" --pass-stdin
+
+      - name: Push image (chunked)
+        id: push
+        shell: bash
+        env:
+          IMAGE: ${{ steps.vars.outputs.image }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          # Push the primary tag with chunked blob uploads, then add the
+          # remaining tags via in-registry copy (cross-repo blob mount = tiny requests).
+          regctl image import "${IMAGE}:${VERSION}" "${RUNNER_TEMP}/image.tar"
+          while IFS= read -r tag; do
+            [ -z "$tag" ] && continue
+            [ "$tag" = "${IMAGE}:${VERSION}" ] && continue
+            regctl image copy "${IMAGE}:${VERSION}" "$tag"
+          done <<< "${TAGS}"
+          DIGEST="$(regctl image digest "${IMAGE}:${VERSION}")"
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Cosign
+        if: ${{ inputs.sign }}
+        uses: sigstore/cosign-installer@v4.1.2
+
+      - name: Sign image
+        if: ${{ inputs.sign }}
+        shell: bash
+        env:
+          IMAGE: ${{ steps.vars.outputs.image }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          COSIGN_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+          COSIGN_PASSWORD_REG: ${{ secrets.HARBOR_PASSWORD }}
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          # All tags share one manifest digest, so a single signature covers them all.
+          cosign sign --yes \
+            --registry-username="${COSIGN_USERNAME}" \
+            --registry-password="${COSIGN_PASSWORD_REG}" \
+            --key env://COSIGN_PRIVATE_KEY \
+            "${IMAGE}@${DIGEST}"
