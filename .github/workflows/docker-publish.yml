@@ -54,10 +54,15 @@ on:
         type: string
         default: ""
       blob-chunk:
-        description: "Chunk size in bytes for blob uploads above which chunked push is used (default 50 MiB, safely below a 100 MB proxy limit)"
+        description: "Chunk size in bytes for blob uploads above which chunked push is used (default 50 MiB, safely below a 100 MB proxy limit). Larger chunks = fewer round-trips and fewer storage-backend parts, but stay under the proxy cap."
         required: false
         type: string
         default: "52428800"
+      req-concurrent:
+        description: "How many layers (blobs) regctl uploads concurrently. Chunks within a single layer stay sequential. Lower this if the registry's storage backend returns 5xx under load."
+        required: false
+        type: string
+        default: "3"
       sign:
         description: "Sign the pushed image with cosign (requires COSIGN_KEY / COSIGN_PASSWORD secrets)"
         required: false
@@ -109,6 +114,7 @@ jobs:
     env:
       VERSION: ${{ inputs.version }}
       BLOB_CHUNK: ${{ inputs.blob-chunk }}
+      REQ_CONCURRENT: ${{ inputs.req-concurrent }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -190,7 +196,7 @@ jobs:
           # regctl is the registry client (it chunks blob uploads, unlike docker push).
           # --skip-check skips its anonymous connectivity ping, which a private
           # registry answers with 401; credentials are exercised during the push.
-          regctl registry set --skip-check --blob-chunk "${BLOB_CHUNK}" --blob-max "${BLOB_CHUNK}" "${HARBOR_REGISTRY}"
+          regctl registry set --skip-check --blob-chunk "${BLOB_CHUNK}" --blob-max "${BLOB_CHUNK}" --req-concurrent "${REQ_CONCURRENT}" "${HARBOR_REGISTRY}"
           printf '%s' "${HARBOR_PASSWORD}" | \
             regctl registry login "${HARBOR_REGISTRY}" -u "${HARBOR_USERNAME}" --pass-stdin --skip-check
 
