@@ -6,6 +6,7 @@ name: Reusable - Docker Publish (chunked)
 # exceeds the request-body limit of a proxy in front of the registry (e.g. the
 # 100 MB Cloudflare limit): blobs larger than `blob-chunk` are split into
 # multiple smaller PATCH requests instead of one monolithic PUT.
+# The pushed image is optionally signed keyless with cosign via GitHub OIDC.
 
 on:
   workflow_call:
@@ -64,7 +65,7 @@ on:
         type: string
         default: "3"
       sign:
-        description: "Sign the pushed image with cosign (requires COSIGN_KEY / COSIGN_PASSWORD secrets)"
+        description: "Keyless-sign the pushed image with cosign via the GitHub OIDC identity. The calling job must grant `id-token: write`."
         required: false
         type: boolean
         default: true
@@ -72,7 +73,7 @@ on:
         description: "regctl release tag to install"
         required: false
         type: string
-        default: "v0.8.2"
+        default: "v0.11.5"
       runs-on:
         description: "Runner image"
         required: false
@@ -85,10 +86,6 @@ on:
         required: true
       HARBOR_PASSWORD:
         required: true
-      COSIGN_KEY:
-        required: false
-      COSIGN_PASSWORD:
-        required: false
     outputs:
       image:
         description: "Fully qualified image reference (registry/image-name)"
@@ -103,6 +100,7 @@ concurrency:
 
 permissions:
   contents: read
+  id-token: write   # keyless cosign signing (caller must also grant id-token: write)
 
 jobs:
   docker:
@@ -222,7 +220,7 @@ jobs:
         if: ${{ inputs.sign }}
         uses: sigstore/cosign-installer@v4.1.2
 
-      - name: Sign image
+      - name: Sign image (keyless)
         if: ${{ inputs.sign }}
         shell: bash
         env:
@@ -230,12 +228,10 @@ jobs:
           DIGEST: ${{ steps.push.outputs.digest }}
           COSIGN_USERNAME: ${{ secrets.HARBOR_USERNAME }}
           COSIGN_PASSWORD_REG: ${{ secrets.HARBOR_PASSWORD }}
-          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_KEY }}
-          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
+          # Keyless signing via the GitHub Actions OIDC identity (no key/password).
           # All tags share one manifest digest, so a single signature covers them all.
           cosign sign --yes \
             --registry-username="${COSIGN_USERNAME}" \
             --registry-password="${COSIGN_PASSWORD_REG}" \
-            --key env://COSIGN_PRIVATE_KEY \
             "${IMAGE}@${DIGEST}"
