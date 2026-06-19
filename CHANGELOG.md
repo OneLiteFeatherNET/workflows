@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.0](https://github.com/OneLiteFeatherNET/workflows/compare/v2.1.0...v2.2.0) (2026-06-19)
+
+
+### Features
+
+* **docker-publish:** reusable chunked docker publish workflow ([#13](https://github.com/OneLiteFeatherNET/workflows/issues/13)) ([887181d](https://github.com/OneLiteFeatherNET/workflows/commit/887181df56e19ef51a8b675a12bc695bf3ad9f20))
+
 ## [2.1.0](https://github.com/OneLiteFeatherNET/workflows/compare/v2.0.1...v2.1.0) (2026-05-13)
 
 
