@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.0](https://github.com/OneLiteFeatherNET/workflows/compare/v2.2.0...v2.3.0) (2026-06-21)
+
+
+### Features
+
+* **docker-publish:** pure Docker build + gradle-docker-context producer ([#15](https://github.com/OneLiteFeatherNET/workflows/issues/15)) ([7c9f397](https://github.com/OneLiteFeatherNET/workflows/commit/7c9f3975bdf64b1ba0d32e6232f6c04c72d84137))
+
 ## [2.2.0](https://github.com/OneLiteFeatherNET/workflows/compare/v2.1.0...v2.2.0) (2026-06-19)
 
 
