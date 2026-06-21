@@ -1,0 +1,120 @@
+name: Reusable - Gradle Docker Context
+
+# Builds a Docker build context with a Gradle/Micronaut toolchain and uploads it
+# as an artifact for a downstream docker-publish.yml job to consume. This keeps
+# docker-publish.yml toolchain-agnostic: all JDK/Gradle concerns live here.
+#
+# Typical use (Micronaut optimized context):
+#   gradle-command: "./gradlew jar optimizedBuildLayers optimizedDockerfile -Pversion=$VERSION"
+#   context-path:   "build/docker/optimized"
+# Then docker-publish.yml is called with the same `artifact-name` and a matching
+# `context`.
+
+on:
+  workflow_call:
+    inputs:
+      gradle-command:
+        description: "Gradle command that produces the Docker context. $VERSION is exported from the version input."
+        required: true
+        type: string
+      version:
+        description: "Version exported as $VERSION for the build"
+        required: true
+        type: string
+      context-path:
+        description: "Directory produced by the build to upload as the context artifact, e.g. 'build/docker/optimized'"
+        required: true
+        type: string
+      artifact-name:
+        description: "Name of the uploaded context artifact (pass the same value to docker-publish's artifact-name)"
+        required: false
+        type: string
+        default: "docker-context"
+      java-version:
+        description: "JDK version to use"
+        required: false
+        type: string
+        default: "25"
+      java-distribution:
+        description: "JDK distribution (temurin, zulu, ...)"
+        required: false
+        type: string
+        default: "temurin"
+      validate-wrapper:
+        description: "Run gradle wrapper validation before building"
+        required: false
+        type: boolean
+        default: true
+      retention-days:
+        description: "How long to keep the context artifact (it is only needed for the downstream docker job in the same run)"
+        required: false
+        type: number
+        default: 1
+      runs-on:
+        description: "Runner image"
+        required: false
+        type: string
+        default: "ubuntu-latest"
+    secrets:
+      # Optional credentials for the private OneLiteFeather Maven repository,
+      # mirroring gradle-publish.yml. Required only when the build resolves
+      # private artifacts.
+      ONELITEFEATHER_MAVEN_USERNAME:
+        required: false
+      ONELITEFEATHER_MAVEN_PASSWORD:
+        required: false
+    outputs:
+      artifact-name:
+        description: "Name of the uploaded context artifact"
+        value: ${{ inputs.artifact-name }}
+
+concurrency:
+  group: gradle-docker-context-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-context:
+    name: Build Docker context (Gradle)
+    runs-on: ${{ inputs.runs-on }}
+    env:
+      VERSION: ${{ inputs.version }}
+      ONELITEFEATHER_MAVEN_USERNAME: ${{ secrets.ONELITEFEATHER_MAVEN_USERNAME }}
+      ONELITEFEATHER_MAVEN_PASSWORD: ${{ secrets.ONELITEFEATHER_MAVEN_PASSWORD }}
+      GRADLE_OPTS: "-Dorg.gradle.parallel=true -Dorg.gradle.caching=true -Dorg.gradle.welcome=never"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate Gradle wrapper
+        if: ${{ inputs.validate-wrapper }}
+        uses: gradle/actions/wrapper-validation@v6
+
+      - name: Set up JDK ${{ inputs.java-version }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: ${{ inputs.java-distribution }}
+          java-version: ${{ inputs.java-version }}
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Build context
+        shell: bash
+        run: |
+          if [ "${RUNNER_DEBUG:-0}" = "1" ]; then
+            ${{ inputs.gradle-command }} --info --stacktrace
+          else
+            ${{ inputs.gradle-command }}
+          fi
+
+      - name: Upload context artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.context-path }}
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: ${{ inputs.retention-days }}
