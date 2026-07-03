@@ -16,7 +16,7 @@ repositories by referencing a tagged release of this repo.
 | `.github/workflows/release-please.yml` | Run [release-please](https://github.com/googleapis/release-please) for a repository. |
 | `.github/workflows/close-invalid-prs.yml` | Close PRs opened from a fork's default branch with a configurable message. |
 | `.github/workflows/markdown-lint.yml` | Lint Markdown files with [`markdownlint-cli2`](https://github.com/DavidAnson/markdownlint-cli2-action) and check links with [`lychee`](https://github.com/lycheeverse/lychee-action). |
-| `.github/workflows/style-check.yml` | Language-aware style/formatting checks (Java/Kotlin Spotless, Rust rustfmt+clippy, Dart format+analyze, JS/TS, Python ruff, EditorConfig). Each language is a separate job that auto-skips when unchanged, is toggleable, and runs strictly in check mode (never mutates). |
+| `.github/workflows/style-check.yml` | Language-aware style/formatting checks (Java/Kotlin Spotless, Rust rustfmt+clippy, Dart format+analyze, JS/TS, Python ruff, Shell shellcheck, YAML yamllint, EditorConfig). Each language is a separate job that auto-skips when unchanged, is toggleable, and runs strictly in check mode (never mutates). |
 
 ## Defaults at a glance
 
@@ -257,6 +257,11 @@ Per language:
   otherwise `prettier --check`. Override with `javascript-command`.
 - **Python** — `ruff check` + `ruff format --check`. Override with
   `python-command`.
+- **Shell** — `shellcheck` over tracked `*.sh`/`*.bash`/`*.zsh` files
+  (severity via `shellcheck-severity`, default `style`). Override with
+  `shell-command`.
+- **YAML** — `yamllint`; uses a repo-local `.yamllint*` config if present,
+  otherwise the built-in `relaxed` ruleset. Override with `yaml-command`.
 - **EditorConfig** — language-agnostic baseline via
   [`editorconfig-checker`](https://github.com/editorconfig-checker/editorconfig-checker).
 

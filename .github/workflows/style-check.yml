@@ -45,6 +45,16 @@ on:
         required: false
         type: boolean
         default: true
+      shell:
+        description: "Run the Shell (shellcheck) check."
+        required: false
+        type: boolean
+        default: true
+      yaml:
+        description: "Run the YAML (yamllint) check."
+        required: false
+        type: boolean
+        default: true
       editorconfig:
         description: "Run the language-agnostic EditorConfig baseline check."
         required: false
@@ -105,6 +115,29 @@ on:
         type: string
         default: ""
 
+      # --- Shell ---
+      shellcheck-severity:
+        description: "Minimum shellcheck severity to report (error, warning, info, style)."
+        required: false
+        type: string
+        default: "style"
+      shell-command:
+        description: |
+          Command to run for the Shell check. When empty, runs `shellcheck` over
+          all tracked `*.sh`/`*.bash`/`*.zsh` files (no-op when there are none).
+        required: false
+        type: string
+        default: ""
+
+      # --- YAML ---
+      yaml-command:
+        description: |
+          Command to run for the YAML check. When empty, runs `yamllint` using a
+          repo-local config (`.yamllint*`) if present, otherwise `-d relaxed`.
+        required: false
+        type: string
+        default: ""
+
       # --- EditorConfig ---
       editorconfig-checker-image:
         description: "Docker image used for the EditorConfig baseline check."
@@ -159,6 +192,16 @@ on:
             - '**/pyproject.toml'
             - '**/ruff.toml'
             - '.ruff.toml'
+          shell:
+            - '**/*.sh'
+            - '**/*.bash'
+            - '**/*.zsh'
+          yaml:
+            - '**/*.yml'
+            - '**/*.yaml'
+            - '.yamllint'
+            - '.yamllint.yml'
+            - '.yamllint.yaml'
           editorconfig:
             - '**/*'
 
@@ -177,6 +220,8 @@ jobs:
       dart: ${{ steps.filter.outputs.dart }}
       js: ${{ steps.filter.outputs.js }}
       python: ${{ steps.filter.outputs.python }}
+      shell: ${{ steps.filter.outputs.shell }}
+      yaml: ${{ steps.filter.outputs.yaml }}
       editorconfig: ${{ steps.filter.outputs.editorconfig }}
     steps:
       - name: Filter changed paths
@@ -297,6 +342,57 @@ jobs:
           else
             pipx run ruff check .
             pipx run ruff format --check .
+          fi
+
+  shell:
+    name: Style · Shell (shellcheck)
+    needs: changes
+    if: ${{ inputs.shell && (inputs.force || needs.changes.outputs.shell == 'true') }}
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: shellcheck
+        shell: bash
+        env:
+          CUSTOM_CMD: ${{ inputs.shell-command }}
+          SEVERITY: ${{ inputs.shellcheck-severity }}
+        run: |
+          if [ -n "$CUSTOM_CMD" ]; then
+            echo "Running custom command: $CUSTOM_CMD"
+            eval "$CUSTOM_CMD"
+          else
+            mapfile -t files < <(git ls-files '*.sh' '*.bash' '*.zsh')
+            if [ "${#files[@]}" -eq 0 ]; then
+              echo "::notice::No shell scripts tracked; skipping."
+            else
+              printf 'Checking %d shell file(s)\n' "${#files[@]}"
+              shellcheck --severity="$SEVERITY" "${files[@]}"
+            fi
+          fi
+
+  yaml:
+    name: Style · YAML (yamllint)
+    needs: changes
+    if: ${{ inputs.yaml && (inputs.force || needs.changes.outputs.yaml == 'true') }}
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: yamllint
+        shell: bash
+        env:
+          CUSTOM_CMD: ${{ inputs.yaml-command }}
+        run: |
+          if [ -n "$CUSTOM_CMD" ]; then
+            echo "Running custom command: $CUSTOM_CMD"
+            eval "$CUSTOM_CMD"
+          elif ls .yamllint .yamllint.yml .yamllint.yaml >/dev/null 2>&1; then
+            echo "Using repo-local yamllint config."
+            pipx run yamllint --strict .
+          else
+            echo "No repo config; using the built-in 'relaxed' ruleset."
+            pipx run yamllint -d relaxed .
           fi
 
   editorconfig:
