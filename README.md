@@ -16,6 +16,7 @@ repositories by referencing a tagged release of this repo.
 | `.github/workflows/release-please.yml` | Run [release-please](https://github.com/googleapis/release-please) for a repository. |
 | `.github/workflows/close-invalid-prs.yml` | Close PRs opened from a fork's default branch with a configurable message. |
 | `.github/workflows/markdown-lint.yml` | Lint Markdown files with [`markdownlint-cli2`](https://github.com/DavidAnson/markdownlint-cli2-action) and check links with [`lychee`](https://github.com/lycheeverse/lychee-action). |
+| `.github/workflows/style-check.yml` | Language-aware style/formatting checks (Java/Kotlin Spotless, Rust rustfmt+clippy, Dart format+analyze, JS/TS, Python ruff, Shell shellcheck, YAML yamllint, EditorConfig). Each language is a separate job that auto-skips when unchanged, is toggleable, and runs strictly in check mode (never mutates). |
 
 ## Defaults at a glance
 
@@ -215,6 +216,56 @@ jobs:
 
 A `.markdownlint.json` and optional `.lycheeignore` (regex per line) at the
 repo root configure rules and skip-lists.
+
+### Style check (multi-language)
+
+```yaml
+name: Style
+on: [pull_request]
+
+jobs:
+  style:
+    uses: OneLiteFeatherNET/workflows/.github/workflows/style-check.yml@v2
+```
+
+Each language runs as its own job and **only when files for that language
+changed** — a Gradle plugin repo runs just the Spotless job, a Dart repo just
+the Dart job, and so on. All checks are **non-mutating** (verify mode only).
+
+Disable languages you don't use, or force everything to run:
+
+```yaml
+jobs:
+  style:
+    uses: OneLiteFeatherNET/workflows/.github/workflows/style-check.yml@v2
+    with:
+      python: false          # skip the Python job entirely
+      rust-clippy: false     # rustfmt only, no clippy
+      force: true            # ignore path filters, run every enabled check
+```
+
+Per language:
+
+- **Java/Kotlin** — runs `./gradlew spotlessCheck` (task name configurable via
+  `gradle-spotless-task`). Auto-skips if the task does not exist, so repos
+  without Spotless don't fail.
+- **Rust** — `cargo fmt --all --check`, plus `cargo clippy -D warnings` unless
+  `rust-clippy: false`.
+- **Dart** — `dart format --set-exit-if-changed`, plus `dart analyze` unless
+  `dart-analyze: false`.
+- **JavaScript/TypeScript** — runs `npm run lint` if a `lint` script exists,
+  otherwise `prettier --check`. Override with `javascript-command`.
+- **Python** — `ruff check` + `ruff format --check`. Override with
+  `python-command`.
+- **Shell** — `shellcheck` over tracked `*.sh`/`*.bash`/`*.zsh` files
+  (severity via `shellcheck-severity`, default `style`). Override with
+  `shell-command`.
+- **YAML** — `yamllint`; uses a repo-local `.yamllint*` config if present,
+  otherwise the built-in `relaxed` ruleset. Override with `yaml-command`.
+- **EditorConfig** — language-agnostic baseline via
+  [`editorconfig-checker`](https://github.com/editorconfig-checker/editorconfig-checker).
+
+No secrets required.
 
 ## Required secrets
 

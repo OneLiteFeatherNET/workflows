@@ -1,0 +1,409 @@
+name: Reusable - Style Check
+
+# Language-aware style / formatting checks. Every language runs as its own job
+# that (a) only runs when files for that language changed (dorny/paths-filter),
+# (b) can be toggled off via an input, and (c) is strictly non-mutating: every
+# tool runs in check/verify mode and never writes changes back.
+
+on:
+  workflow_call:
+    inputs:
+      repository-owner:
+        description: "Restrict execution to this owner (skip on forks). Empty disables the check."
+        required: false
+        type: string
+        default: "OneLiteFeatherNET"
+      force:
+        description: "Skip path filters and run every enabled language check."
+        required: false
+        type: boolean
+        default: false
+
+      # --- language toggles ---
+      java:
+        description: "Run the JVM (Java/Kotlin) Spotless check."
+        required: false
+        type: boolean
+        default: true
+      rust:
+        description: "Run the Rust rustfmt (+ optional clippy) check."
+        required: false
+        type: boolean
+        default: true
+      dart:
+        description: "Run the Dart format (+ optional analyze) check."
+        required: false
+        type: boolean
+        default: true
+      javascript:
+        description: "Run the JavaScript/TypeScript style check."
+        required: false
+        type: boolean
+        default: true
+      python:
+        description: "Run the Python ruff check."
+        required: false
+        type: boolean
+        default: true
+      shell:
+        description: "Run the Shell (shellcheck) check."
+        required: false
+        type: boolean
+        default: true
+      yaml:
+        description: "Run the YAML (yamllint) check."
+        required: false
+        type: boolean
+        default: true
+      editorconfig:
+        description: "Run the language-agnostic EditorConfig baseline check."
+        required: false
+        type: boolean
+        default: true
+
+      # --- JVM ---
+      java-version:
+        description: "JDK version for the Spotless check."
+        required: false
+        type: string
+        default: "25"
+      java-distribution:
+        description: "JDK distribution (temurin, zulu, ...)."
+        required: false
+        type: string
+        default: "temurin"
+      gradle-spotless-task:
+        description: "Gradle task that verifies formatting. Skipped automatically if the task does not exist."
+        required: false
+        type: string
+        default: "spotlessCheck"
+
+      # --- Rust ---
+      rust-clippy:
+        description: "Additionally run `cargo clippy -D warnings`."
+        required: false
+        type: boolean
+        default: true
+
+      # --- Dart ---
+      dart-analyze:
+        description: "Additionally run `dart analyze`."
+        required: false
+        type: boolean
+        default: true
+
+      # --- JavaScript / TypeScript ---
+      node-version:
+        description: "Node.js version for the JS/TS check."
+        required: false
+        type: string
+        default: "22"
+      javascript-command:
+        description: |
+          Command to run for the JS/TS check. When empty the job auto-detects:
+          `npm run lint` if a `lint` script exists, otherwise `prettier --check .`.
+        required: false
+        type: string
+        default: ""
+
+      # --- Python ---
+      python-command:
+        description: |
+          Command to run for the Python check. When empty runs
+          `ruff check .` followed by `ruff format --check .`.
+        required: false
+        type: string
+        default: ""
+
+      # --- Shell ---
+      shellcheck-severity:
+        description: "Minimum shellcheck severity to report (error, warning, info, style)."
+        required: false
+        type: string
+        default: "style"
+      shell-command:
+        description: |
+          Command to run for the Shell check. When empty, runs `shellcheck` over
+          all tracked `*.sh`/`*.bash`/`*.zsh` files (no-op when there are none).
+        required: false
+        type: string
+        default: ""
+
+      # --- YAML ---
+      yaml-command:
+        description: |
+          Command to run for the YAML check. When empty, runs `yamllint` using a
+          repo-local config (`.yamllint*`) if present, otherwise `-d relaxed`.
+        required: false
+        type: string
+        default: ""
+
+      # --- EditorConfig ---
+      editorconfig-checker-image:
+        description: "Docker image used for the EditorConfig baseline check."
+        required: false
+        type: string
+        default: "mstruebing/editorconfig-checker:latest"
+
+      runs-on:
+        description: "Runner image."
+        required: false
+        type: string
+        default: "ubuntu-latest"
+
+      paths-filters:
+        description: |
+          dorny/paths-filter YAML. Must define one filter per language:
+          `java`, `rust`, `dart`, `js`, `python`, `editorconfig`.
+        required: false
+        type: string
+        default: |
+          java:
+            - '**/*.java'
+            - '**/*.kt'
+            - '**/*.kts'
+            - '**/*.groovy'
+            - '**/*.gradle'
+            - '**/*.gradle.kts'
+          rust:
+            - '**/*.rs'
+            - '**/Cargo.toml'
+            - 'rustfmt.toml'
+            - '.rustfmt.toml'
+            - 'clippy.toml'
+          dart:
+            - '**/*.dart'
+            - '**/pubspec.yaml'
+            - '**/analysis_options.yaml'
+          js:
+            - '**/*.js'
+            - '**/*.jsx'
+            - '**/*.ts'
+            - '**/*.tsx'
+            - '**/*.mjs'
+            - '**/*.cjs'
+            - '**/package.json'
+            - '**/.eslintrc*'
+            - '**/eslint.config.*'
+            - '**/.prettierrc*'
+            - '**/biome.json'
+          python:
+            - '**/*.py'
+            - '**/pyproject.toml'
+            - '**/ruff.toml'
+            - '.ruff.toml'
+          shell:
+            - '**/*.sh'
+            - '**/*.bash'
+            - '**/*.zsh'
+          yaml:
+            - '**/*.yml'
+            - '**/*.yaml'
+            - '.yamllint'
+            - '.yamllint.yml'
+            - '.yamllint.yaml'
+          editorconfig:
+            - '**/*'
+
+concurrency:
+  group: style-check-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Detect language changes
+    if: ${{ inputs.repository-owner == '' || github.repository_owner == inputs.repository-owner }}
+    runs-on: ubuntu-latest
+    outputs:
+      java: ${{ steps.filter.outputs.java }}
+      rust: ${{ steps.filter.outputs.rust }}
+      dart: ${{ steps.filter.outputs.dart }}
+      js: ${{ steps.filter.outputs.js }}
+      python: ${{ steps.filter.outputs.python }}
+      shell: ${{ steps.filter.outputs.shell }}
+      yaml: ${{ steps.filter.outputs.yaml }}
+      editorconfig: ${{ steps.filter.outputs.editorconfig }}
+    steps:
+      - name: Filter changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: ${{ inputs.paths-filters }}
+
+  java:
+    name: Style · Java/Kotlin (Spotless)
+    needs: changes
+    if: ${{ inputs.java && (inputs.force || needs.changes.outputs.java == 'true') }}
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v6
+      - name: Set up JDK ${{ inputs.java-version }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: ${{ inputs.java-distribution }}
+          java-version: ${{ inputs.java-version }}
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: ${{ github.ref != format('refs/heads/{0}', github.event.repository.default_branch) }}
+      - name: Spotless check
+        shell: bash
+        env:
+          TASK: ${{ inputs.gradle-spotless-task }}
+        run: |
+          if ./gradlew help --task "$TASK" >/dev/null 2>&1; then
+            ./gradlew "$TASK"
+          else
+            echo "::notice::Gradle task '$TASK' not found; no Spotless configured — skipping."
+          fi
+
+  rust:
+    name: Style · Rust (rustfmt/clippy)
+    needs: changes
+    if: ${{ inputs.rust && (inputs.force || needs.changes.outputs.rust == 'true') }}
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Add rustfmt & clippy
+        run: rustup component add rustfmt clippy
+      - name: rustfmt --check
+        run: cargo fmt --all --check
+      - name: clippy
+        if: ${{ inputs.rust-clippy }}
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  dart:
+    name: Style · Dart (format/analyze)
+    needs: changes
+    if: ${{ inputs.dart && (inputs.force || needs.changes.outputs.dart == 'true') }}
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Dart
+        uses: dart-lang/setup-dart@v1
+      - name: Resolve dependencies
+        run: dart pub get
+      - name: dart format --set-exit-if-changed
+        run: dart format --output=none --set-exit-if-changed .
+      - name: dart analyze
+        if: ${{ inputs.dart-analyze }}
+        run: dart analyze
+
+  javascript:
+    name: Style · JavaScript/TypeScript
+    needs: changes
+    if: ${{ inputs.javascript && (inputs.force || needs.changes.outputs.js == 'true') }}
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Node ${{ inputs.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+      - name: Style check
+        shell: bash
+        env:
+          CUSTOM_CMD: ${{ inputs.javascript-command }}
+        run: |
+          if [ -n "$CUSTOM_CMD" ]; then
+            echo "Running custom command: $CUSTOM_CMD"
+            eval "$CUSTOM_CMD"
+          elif [ -f package.json ] && jq -e '.scripts.lint' package.json >/dev/null 2>&1; then
+            echo "Detected 'lint' script; running it."
+            npm ci --ignore-scripts
+            npm run lint
+          else
+            echo "No lint script; falling back to prettier --check."
+            npx --yes prettier@3 --check .
+          fi
+
+  python:
+    name: Style · Python (ruff)
+    needs: changes
+    if: ${{ inputs.python && (inputs.force || needs.changes.outputs.python == 'true') }}
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Style check
+        shell: bash
+        env:
+          CUSTOM_CMD: ${{ inputs.python-command }}
+        run: |
+          if [ -n "$CUSTOM_CMD" ]; then
+            echo "Running custom command: $CUSTOM_CMD"
+            eval "$CUSTOM_CMD"
+          else
+            pipx run ruff check .
+            pipx run ruff format --check .
+          fi
+
+  shell:
+    name: Style · Shell (shellcheck)
+    needs: changes
+    if: ${{ inputs.shell && (inputs.force || needs.changes.outputs.shell == 'true') }}
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: shellcheck
+        shell: bash
+        env:
+          CUSTOM_CMD: ${{ inputs.shell-command }}
+          SEVERITY: ${{ inputs.shellcheck-severity }}
+        run: |
+          if [ -n "$CUSTOM_CMD" ]; then
+            echo "Running custom command: $CUSTOM_CMD"
+            eval "$CUSTOM_CMD"
+          else
+            mapfile -t files < <(git ls-files '*.sh' '*.bash' '*.zsh')
+            if [ "${#files[@]}" -eq 0 ]; then
+              echo "::notice::No shell scripts tracked; skipping."
+            else
+              printf 'Checking %d shell file(s)\n' "${#files[@]}"
+              shellcheck --severity="$SEVERITY" "${files[@]}"
+            fi
+          fi
+
+  yaml:
+    name: Style · YAML (yamllint)
+    needs: changes
+    if: ${{ inputs.yaml && (inputs.force || needs.changes.outputs.yaml == 'true') }}
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: yamllint
+        shell: bash
+        env:
+          CUSTOM_CMD: ${{ inputs.yaml-command }}
+        run: |
+          if [ -n "$CUSTOM_CMD" ]; then
+            echo "Running custom command: $CUSTOM_CMD"
+            eval "$CUSTOM_CMD"
+          elif ls .yamllint .yamllint.yml .yamllint.yaml >/dev/null 2>&1; then
+            echo "Using repo-local yamllint config."
+            pipx run yamllint --strict .
+          else
+            echo "No repo config; using the built-in 'relaxed' ruleset."
+            pipx run yamllint -d relaxed .
+          fi
+
+  editorconfig:
+    name: Style · EditorConfig
+    needs: changes
+    if: ${{ inputs.editorconfig && (inputs.force || needs.changes.outputs.editorconfig == 'true') }}
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: EditorConfig check
+        run: |
+          docker run --rm --volume="${{ github.workspace }}:/check" \
+            "${{ inputs.editorconfig-checker-image }}"
