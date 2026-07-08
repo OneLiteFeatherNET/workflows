@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.0](https://github.com/OneLiteFeatherNET/workflows/compare/v2.3.0...v2.4.0) (2026-07-08)
+
+
+### Features
+
+* **pr-lint:** add reusable Conventional Commits PR/commit lint workflow ([#18](https://github.com/OneLiteFeatherNET/workflows/issues/18)) ([66f4ba4](https://github.com/OneLiteFeatherNET/workflows/commit/66f4ba45e63e1f14b00eb741b82336abe45b0986))
+
 ## [2.3.0](https://github.com/OneLiteFeatherNET/workflows/compare/v2.2.0...v2.3.0) (2026-06-21)
 
 
