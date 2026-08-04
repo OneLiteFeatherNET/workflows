@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.5.0](https://github.com/OneLiteFeatherNET/workflows/compare/v2.4.0...v2.5.0) (2026-08-04)
+
+
+### Features
+
+* expose release-please outputs to calling workflows ([#21](https://github.com/OneLiteFeatherNET/workflows/issues/21)) ([339e8a1](https://github.com/OneLiteFeatherNET/workflows/commit/339e8a121935c89fbb796d537482d15c46215ef1))
+
 ## [2.4.0](https://github.com/OneLiteFeatherNET/workflows/compare/v2.3.0...v2.4.0) (2026-07-08)
 
 
