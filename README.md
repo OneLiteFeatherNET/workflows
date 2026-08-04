@@ -176,9 +176,38 @@ permissions:
   pull-requests: write
 
 jobs:
-  release:
-    uses: OneLiteFeatherNET/workflows/.github/workflows/release-please.yml@v2
+  release-please:
+    uses: OneLiteFeatherNET/workflows/.github/workflows/release-please.yml@v2.5.0
 ```
+
+The workflow forwards the action's outputs, so a follow-up job can be gated on whether a
+release was actually cut:
+
+```yaml
+jobs:
+  release-please:
+    uses: OneLiteFeatherNET/workflows/.github/workflows/release-please.yml@v2.5.0
+
+  publish:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    uses: OneLiteFeatherNET/workflows/.github/workflows/gradle-publish.yml@v2.5.0
+    secrets: inherit
+```
+
+| Output | Description |
+|---|---|
+| `release_created` | `'true'` when the root package was released. |
+| `releases_created` | `'true'` when at least one release was created - use this on a multi-package manifest. |
+| `tag_name` | Tag of the root package's release, e.g. `v1.2.3`. Empty when it was not released. |
+| `version` | Version of the root package's release, e.g. `1.2.3`. Empty when it was not released. |
+| `sha` | Commit the root package's release was cut from. |
+| `paths_released` | JSON array of released package paths. |
+| `prs` | JSON array of the release pull requests opened or updated. |
+
+On a multi-package manifest the action exposes per-package values as `<path>--release_created`
+and friends. Those names are not fixed, so a reusable workflow cannot declare them - gate on
+`releases_created` and read `paths_released` instead.
 
 ### Close invalid PRs
 

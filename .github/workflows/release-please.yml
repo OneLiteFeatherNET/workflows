@@ -23,6 +23,28 @@ on:
         required: false
         type: string
         default: "ubuntu-latest"
+    outputs:
+      release_created:
+        description: "'true' when the root package was released. Gate a publish or docker job on this. Only set for the root package - on a multi-package manifest other paths are exposed by the action as '<path>--release_created', which a reusable workflow cannot forward."
+        value: ${{ jobs.release-please.outputs.release_created }}
+      releases_created:
+        description: "'true' when at least one release was created. Use this rather than release_created on a multi-package manifest."
+        value: ${{ jobs.release-please.outputs.releases_created }}
+      tag_name:
+        description: "Tag of the root package's release, e.g. v1.2.3. Empty when it was not released."
+        value: ${{ jobs.release-please.outputs.tag_name }}
+      version:
+        description: "Version of the root package's release, e.g. 1.2.3 - the tag without its prefix. Empty when it was not released."
+        value: ${{ jobs.release-please.outputs.version }}
+      sha:
+        description: "Commit the root package's release was cut from."
+        value: ${{ jobs.release-please.outputs.sha }}
+      paths_released:
+        description: "JSON array of the released package paths. The one to iterate over on a multi-package manifest."
+        value: ${{ jobs.release-please.outputs.paths_released }}
+      prs:
+        description: "JSON array of the release pull requests opened or updated by this run."
+        value: ${{ jobs.release-please.outputs.prs }}
 
 jobs:
   release-please:
@@ -31,8 +53,21 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+    # Forwarded from the action so callers can gate follow-up jobs. Without them a caller's
+    # `if: needs.release-please.outputs.release_created == 'true'` silently evaluates to false and
+    # the follow-up never runs - the release is tagged, but nothing is published. The README has
+    # documented that exact pattern all along.
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      releases_created: ${{ steps.release.outputs.releases_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+      sha: ${{ steps.release.outputs.sha }}
+      paths_released: ${{ steps.release.outputs.paths_released }}
+      prs: ${{ steps.release.outputs.prs }}
     steps:
       - name: Run release-please
+        id: release
         uses: googleapis/release-please-action@v5
         with:
           config-file: ${{ inputs.config-file }}
