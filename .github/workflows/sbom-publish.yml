@@ -154,6 +154,49 @@ jobs:
             echo "| Size | $(wc -c < "$file") bytes |"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # gh-upload-sbom reports only "Failed response status code: 4xx" and
+      # throws the response body away, which makes a failure nearly impossible
+      # to diagnose. Probe first and say what is actually wrong.
+      - name: Check Dependency-Track access
+        shell: bash
+        env:
+          DT_HOST: ${{ secrets.DEPENDENCYTRACK_HOSTNAME }}
+          DT_KEY: ${{ secrets.DEPENDENCYTRACK_APIKEY }}
+          PARENT_UUID: ${{ inputs.parent-uuid }}
+        run: |
+          probe() { # $1 = path -> prints status code, body to /tmp/dt-body
+            curl -sS -o /tmp/dt-body -w '%{http_code}' \
+              -H "X-Api-Key: $DT_KEY" "https://${DT_HOST}$1" || echo "000"
+          }
+
+          code="$(probe /api/v1/team/self)"
+          case "$code" in
+            200) echo "Authenticated against $DT_HOST." ;;
+            401)
+              echo "::error::Dependency-Track returned 401 for the API key. The key is unknown or was rotated - update the DEPENDENCYTRACK_APIKEY secret."
+              exit 1 ;;
+            403)
+              echo "::error::Dependency-Track authenticated the key but refused /team/self (403). The key's team is missing a permission."
+              cat /tmp/dt-body || true
+              exit 1 ;;
+            000)
+              echo "::error::Could not reach $DT_HOST at all."
+              exit 1 ;;
+            *) echo "::warning::Unexpected status $code from /api/v1/team/self - continuing anyway." ;;
+          esac
+
+          # A 403 on the upload while the key authenticates fine usually means
+          # portfolio access control is on and the team has no grant on this
+          # project (or on the parent it is being nested under).
+          if [ -n "$PARENT_UUID" ]; then
+            code="$(probe "/api/v1/project/$PARENT_UUID")"
+            if [ "$code" = "403" ]; then
+              echo "::error::The key cannot access parent project $PARENT_UUID (403). Portfolio access control is likely enabled - grant the key's team access to that project, or clear the parent-uuid input."
+              exit 1
+            fi
+            echo "Parent project $PARENT_UUID reachable (HTTP $code)."
+          fi
+
       - name: Upload to Dependency-Track
         uses: DependencyTrack/gh-upload-sbom@v4
         with:
