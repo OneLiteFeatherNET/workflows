@@ -1,0 +1,209 @@
+name: Reusable - Security Scan
+
+# Trivy scan whose findings land in GitHub code scanning instead of being
+# buried in a log nobody reads.
+#
+# Report-only by default on purpose: onboarding a repo onto this should make
+# its vulnerabilities visible, not turn its CI red on day one. Flip
+# `fail-on-findings` once a repo is clean enough to be kept that way.
+#
+# Complements sbom-publish.yml rather than replacing it. This one is a
+# point-in-time gate on the code as it is now; Dependency-Track keeps matching
+# the shipped inventory against CVEs published later.
+#
+# The calling job must grant:
+#   security-events: write   # to upload the SARIF report (skip when upload-sarif is false)
+#   contents: read
+#
+# Note for private repositories: code scanning SARIF upload needs GitHub
+# Advanced Security. On plans without it, set `upload-sarif: false` and rely on
+# the job summary and (optionally) `fail-on-findings`.
+
+on:
+  workflow_call:
+    inputs:
+      scan-type:
+        description: "Trivy scan type: 'fs', 'rootfs' or 'image'"
+        required: false
+        type: string
+        default: "fs"
+      scan-ref:
+        description: "What to scan - a path for 'fs'/'rootfs', an image reference for 'image'. Ignored when artifact-name is set."
+        required: false
+        type: string
+        default: "."
+      ref:
+        description: "Git ref to check out before scanning. Defaults to whatever triggered the caller. Pin this to the released tag when gating a release."
+        required: false
+        type: string
+        default: ""
+      artifact-name:
+        description: |
+          Optional artifact (uploaded by an upstream job in the same run) to
+          download and scan instead of the repository. This is how you gate a
+          release on the artifact that actually ships.
+
+          Use `scan-type: rootfs` with it. For a shaded/fat JAR, `fs` reports
+          nothing at all while `rootfs` finds the bundled libraries - measured
+          on AntiRedstoneClock-Remastered, where `fs` saw 0 packages and
+          `rootfs` saw 12 plus a HIGH finding.
+        required: false
+        type: string
+        default: ""
+      artifact-path:
+        description: "Directory the artifact is downloaded into. Becomes the scan target when artifact-name is set."
+        required: false
+        type: string
+        default: "scan-target"
+      severity:
+        description: "Comma-separated severities to report, e.g. 'CRITICAL,HIGH'"
+        required: false
+        type: string
+        default: "CRITICAL,HIGH"
+      scanners:
+        description: "Comma-separated Trivy scanners, e.g. 'vuln,secret,misconfig'"
+        required: false
+        type: string
+        default: "vuln,secret"
+      ignore-unfixed:
+        description: "Report only vulnerabilities that actually have a fix available."
+        required: false
+        type: boolean
+        default: true
+      fail-on-findings:
+        description: |
+          Fail the job when something at or above `severity` is found. Off by
+          default so that adopting this workflow does not immediately break a
+          repository's CI.
+        required: false
+        type: boolean
+        default: false
+      upload-sarif:
+        description: "Upload the report to GitHub code scanning. Needs Advanced Security on private repositories."
+        required: false
+        type: boolean
+        default: true
+      trivyignores:
+        description: "Comma-separated paths to .trivyignore files."
+        required: false
+        type: string
+        default: ""
+      runs-on:
+        description: "Runner image"
+        required: false
+        type: string
+        default: "ubuntu-latest"
+
+concurrency:
+  # Validation, not a durable side effect - a newer run supersedes this one.
+  group: security-scan-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    name: Trivy scan
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        if: ${{ inputs.scan-type != 'image' && inputs.artifact-name == '' }}
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Download artifact to scan
+        if: ${{ inputs.artifact-name != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.artifact-path }}
+
+      - name: Scan info
+        shell: bash
+        env:
+          SCAN_TYPE: ${{ inputs.scan-type }}
+          SCAN_REF: ${{ inputs.artifact-name != '' && inputs.artifact-path || inputs.scan-ref }}
+          SEVERITY: ${{ inputs.severity }}
+          SCANNERS: ${{ inputs.scanners }}
+          GATING: ${{ inputs.fail-on-findings }}
+        run: |
+          echo "Type     : $SCAN_TYPE"
+          echo "Target   : $SCAN_REF"
+          echo "Severity : $SEVERITY"
+          echo "Scanners : $SCANNERS"
+          echo "Gating   : $GATING"
+
+      # Always exit 0 here. A non-zero exit would skip the SARIF upload and the
+      # findings would never reach code scanning - which is the whole point.
+      - name: Trivy scan (report)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: ${{ inputs.scan-type }}
+          scan-ref: ${{ inputs.artifact-name != '' && inputs.artifact-path || inputs.scan-ref }}
+          scanners: ${{ inputs.scanners }}
+          severity: ${{ inputs.severity }}
+          ignore-unfixed: ${{ inputs.ignore-unfixed }}
+          trivyignores: ${{ inputs.trivyignores }}
+          format: sarif
+          output: trivy-results.sarif
+          exit-code: '0'
+          # Without this the SARIF report ignores `severity` and carries every
+          # severity, so code scanning would disagree with the gate below.
+          limit-severities-for-sarif: true
+
+      - name: Upload SARIF to code scanning
+        if: ${{ inputs.upload-sarif }}
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-${{ inputs.scan-type }}
+
+      - name: Summarise findings
+        if: always()
+        shell: bash
+        env:
+          SCAN_REF: ${{ inputs.artifact-name != '' && inputs.artifact-path || inputs.scan-ref }}
+          SEVERITY: ${{ inputs.severity }}
+        run: |
+          if [ ! -s trivy-results.sarif ]; then
+            echo "No SARIF report produced." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          count="$(python3 -c "
+          import json
+          with open('trivy-results.sarif') as fh:
+              data = json.load(fh)
+          print(sum(len(run.get('results', [])) for run in data.get('runs', [])))
+          ")"
+          {
+            echo "### Trivy"
+            echo ""
+            echo "\`$count\` finding(s) at severity \`$SEVERITY\` in \`$SCAN_REF\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Second pass, only when gating. Re-uses the database the first pass
+      # already downloaded; prints a readable table instead of SARIF.
+      - name: Trivy scan (gate)
+        if: ${{ inputs.fail-on-findings }}
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: ${{ inputs.scan-type }}
+          scan-ref: ${{ inputs.artifact-name != '' && inputs.artifact-path || inputs.scan-ref }}
+          scanners: ${{ inputs.scanners }}
+          severity: ${{ inputs.severity }}
+          ignore-unfixed: ${{ inputs.ignore-unfixed }}
+          trivyignores: ${{ inputs.trivyignores }}
+          format: table
+          exit-code: '1'
+          skip-setup-trivy: true
+
+      - name: Upload SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-sarif-${{ inputs.scan-type }}
+          path: trivy-results.sarif
+          if-no-files-found: ignore
+          retention-days: 14

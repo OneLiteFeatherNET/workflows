@@ -16,6 +16,8 @@ repositories by referencing a tagged release of this repo.
 | `.github/workflows/release-please.yml` | Run [release-please](https://github.com/googleapis/release-please) for a repository. |
 | `.github/workflows/close-invalid-prs.yml` | Close PRs opened from a fork's default branch with a configurable message. |
 | `.github/workflows/markdown-lint.yml` | Lint Markdown files with [`markdownlint-cli2`](https://github.com/DavidAnson/markdownlint-cli2-action) and check links with [`lychee`](https://github.com/lycheeverse/lychee-action). |
+| `.github/workflows/sbom-publish.yml` | Publish a CycloneDX SBOM to the OneLiteFeather [Dependency-Track](https://dependencytrack.org/) instance, so the shipped dependency inventory keeps being matched against CVEs published later. Takes the project's own SBOM via an artifact, or generates one with [Trivy](https://trivy.dev/) when the project has none. |
+| `.github/workflows/security-scan.yml` | Scan a filesystem or container image with [Trivy](https://trivy.dev/) and surface the findings in GitHub code scanning. Report-only by default, optionally gating. |
 
 ## Defaults at a glance
 
@@ -245,6 +247,116 @@ jobs:
 A `.markdownlint.json` and optional `.lycheeignore` (regex per line) at the
 repo root configure rules and skip-lists.
 
+### Publish an SBOM to Dependency-Track
+
+Two shapes, depending on whether the project already generates an SBOM.
+
+**The project generates its own** (preferred — a build tool resolves the
+dependency graph better than any external scanner). Upload it as an artifact,
+then hand the artifact name over:
+
+```yaml
+jobs:
+  publish:
+    # ... your existing build/publish job, ending with:
+    #   - uses: actions/upload-artifact@v4
+    #     with:
+    #       name: sbom
+    #       path: build/reports/cyclonedx/bom.xml
+
+  sbom:
+    needs: publish
+    uses: OneLiteFeatherNET/workflows/.github/workflows/sbom-publish.yml@v2.6.0
+    with:
+      project-name: "MyProject"
+      project-version: "1.2.3"
+      artifact-name: "sbom"
+      sbom-path: "bom.xml"
+    secrets: inherit
+```
+
+**The project generates nothing** — leave `artifact-name` empty and Trivy
+produces a CycloneDX SBOM from the checked-out repository:
+
+```yaml
+jobs:
+  sbom:
+    uses: OneLiteFeatherNET/workflows/.github/workflows/sbom-publish.yml@v2.6.0
+    with:
+      project-name: "MyProject"
+      project-version: "1.2.3"
+    secrets: inherit
+```
+
+Run it as its own job, not as a step inside the publish job: Dependency-Track
+being unreachable should never take down the release that produced the
+artifact.
+
+`autocreate` defaults to `true`, which needs the API key's team to hold
+**`PROJECT_CREATION_UPLOAD`** on top of `BOM_UPLOAD`. Without it the server
+answers `403` the first time any new version is uploaded.
+
+### Scan for vulnerabilities (Trivy)
+
+```yaml
+name: Security
+on:
+  pull_request:
+  schedule:
+    - cron: '0 6 * * 1'   # new CVEs land against unchanged code
+
+jobs:
+  scan:
+    permissions:
+      contents: read
+      security-events: write   # SARIF upload to code scanning
+    uses: OneLiteFeatherNET/workflows/.github/workflows/security-scan.yml@v2.6.0
+```
+
+Report-only by default: adopting it makes findings visible in code scanning
+without turning a repository's CI red on day one. Set `fail-on-findings: true`
+once a repo is clean enough to keep it that way.
+
+On **private** repositories the SARIF upload needs GitHub Advanced Security.
+Without it, set `upload-sarif: false` and rely on the job summary plus
+`fail-on-findings`.
+
+#### Gate a release before anything goes public
+
+To stop a vulnerable build from ever reaching a registry, put the scan in its
+own job between the build and everything that publishes. Have the build upload
+the artifact, gate on it, and let the publishing job depend on the gate:
+
+```yaml
+jobs:
+  build:            # produces the artifact, publishes nothing
+    # - uses: actions/upload-artifact@v4
+    #   with: { name: plugin-jar, path: build/libs/*.jar }
+
+  security-gate:
+    needs: build
+    permissions:
+      contents: read
+      security-events: write
+    uses: OneLiteFeatherNET/workflows/.github/workflows/security-scan.yml@v2.6.0
+    with:
+      scan-type: rootfs        # see the warning below
+      artifact-name: plugin-jar
+      fail-on-findings: true
+    secrets: inherit
+
+  publish:
+    needs: security-gate       # nothing public happens until the gate is green
+    # ...
+```
+
+> **Use `rootfs`, not `fs`, for built JVM artifacts.** Trivy's `fs` scanner
+> ignores JAR contents. Measured on AntiRedstoneClock-Remastered's shaded jar:
+> `fs` reported 0 packages and 0 findings, `rootfs` reported 12 packages and a
+> HIGH finding. `fs` on the source tree of a Gradle project without a
+> `gradle.lockfile` also finds nothing — a gate on it looks green because it
+> checked nothing at all.
+
 ## Required secrets
 
 Workflows that publish or read from the OneLiteFeather Maven repository expect
@@ -259,6 +371,13 @@ these secrets to be available in the caller repository (and forwarded via
 - `HARBOR_REGISTRY` — registry host (no scheme), e.g. `harbor.onelitefeather.dev`
 - `HARBOR_USERNAME`
 - `HARBOR_PASSWORD`
+
+`sbom-publish` talks to Dependency-Track, so it expects:
+
+- `DEPENDENCYTRACK_HOSTNAME` — host only, no scheme, e.g. `dependency-track.onelitefeather.dev`
+- `DEPENDENCYTRACK_APIKEY` — the key's team needs `BOM_UPLOAD`, plus `PROJECT_CREATION_UPLOAD` while `autocreate` is on
+
+`security-scan` needs no secrets at all.
 
 Signing is keyless (cosign + GitHub OIDC) — no signing secrets. The calling job
 just needs `permissions: id-token: write` when `sign: true` (the default).

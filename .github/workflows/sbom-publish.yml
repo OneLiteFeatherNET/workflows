@@ -1,0 +1,177 @@
+name: Reusable - SBOM Publish
+
+# Ship a CycloneDX SBOM to the OneLiteFeather Dependency-Track instance, so the
+# dependency inventory of a release keeps getting matched against new CVEs long
+# after the release itself ran.
+#
+# The SBOM comes from one of two places:
+#   - an artifact uploaded by an upstream job in the same run (`artifact-name`),
+#     for example the CycloneDX Gradle plugin's build/reports/cyclonedx/bom.xml.
+#     Prefer this when the project already produces one: a build-tool generated
+#     SBOM resolves the dependency graph better than any external scanner can.
+#   - Trivy, which generates one from the checked-out repository when no
+#     artifact is given. Zero setup per repo, and it works for projects that
+#     have no SBOM generator of their own.
+#
+# Deliberately a separate job from whatever produced the artifact: Dependency-
+# Track being unreachable, or rejecting the API key, must never take down the
+# release that produced it.
+
+on:
+  workflow_call:
+    inputs:
+      project-name:
+        description: "Dependency-Track project name, e.g. 'AntiRedstoneClock-Remastered'"
+        required: true
+        type: string
+      project-version:
+        description: "Version to record in Dependency-Track, e.g. '2.9.0' (without a leading 'v')"
+        required: true
+        type: string
+      artifact-name:
+        description: |
+          Optional name of an artifact (uploaded by an upstream job in the same
+          run) that contains the SBOM. Leave empty to have Trivy generate one
+          from the checked-out repository instead.
+        required: false
+        type: string
+        default: ""
+      sbom-path:
+        description: "Path of the SBOM inside the downloaded artifact. Ignored when Trivy generates the SBOM."
+        required: false
+        type: string
+        default: "bom.xml"
+      scan-ref:
+        description: "Path Trivy scans when it generates the SBOM itself."
+        required: false
+        type: string
+        default: "."
+      parent-uuid:
+        description: "Optional Dependency-Track parent project UUID to nest this project under."
+        required: false
+        type: string
+        default: ""
+      project-tags:
+        description: "Comma-separated Dependency-Track project tags, e.g. 'bukkit,paper,plugin'"
+        required: false
+        type: string
+        default: ""
+      autocreate:
+        description: |
+          Create the project/version in Dependency-Track when it does not exist
+          yet. This needs the API key's team to hold PROJECT_CREATION_UPLOAD in
+          addition to BOM_UPLOAD - without it the server answers 403 on the
+          first upload of every new version.
+        required: false
+        type: boolean
+        default: true
+      is-latest:
+        description: "Mark this version as the latest one in Dependency-Track."
+        required: false
+        type: boolean
+        default: false
+      runs-on:
+        description: "Runner image"
+        required: false
+        type: string
+        default: "ubuntu-latest"
+    secrets:
+      DEPENDENCYTRACK_HOSTNAME:
+        required: true
+      DEPENDENCYTRACK_APIKEY:
+        required: true
+
+concurrency:
+  # Matches gradle-publish.yml: a durable side effect, never cancelled mid-flight.
+  group: sbom-publish-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish SBOM
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+    steps:
+      # Only needed for the Trivy path - in artifact mode there is nothing to
+      # scan and checking out would just cost time.
+      - name: Checkout
+        if: ${{ inputs.artifact-name == '' }}
+        uses: actions/checkout@v6
+
+      - name: Prepare SBOM directory
+        shell: bash
+        run: mkdir -p sbom
+
+      - name: Download SBOM artifact
+        if: ${{ inputs.artifact-name != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: sbom
+
+      - name: Generate SBOM with Trivy
+        if: ${{ inputs.artifact-name == '' }}
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: ${{ inputs.scan-ref }}
+          format: cyclonedx
+          output: sbom/bom.json
+          # An SBOM is an inventory, not a finding list. Never fail here -
+          # security-scan.yml is what gates on vulnerabilities.
+          exit-code: '0'
+
+      - name: Resolve SBOM file
+        id: sbom
+        shell: bash
+        env:
+          ARTIFACT_NAME: ${{ inputs.artifact-name }}
+          SBOM_PATH: ${{ inputs.sbom-path }}
+          PROJECT_NAME: ${{ inputs.project-name }}
+          PROJECT_VERSION: ${{ inputs.project-version }}
+        run: |
+          if [ -n "$ARTIFACT_NAME" ]; then
+            file="sbom/$SBOM_PATH"
+          else
+            file="sbom/bom.json"
+          fi
+          if [ ! -s "$file" ]; then
+            echo "::error::No SBOM found at '$file'. When passing artifact-name, sbom-path must match the file's path inside that artifact."
+            echo "Contents of the sbom directory:"
+            ls -R sbom || true
+            exit 1
+          fi
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+          {
+            echo "### SBOM"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Project | \`$PROJECT_NAME\` |"
+            echo "| Version | \`$PROJECT_VERSION\` |"
+            echo "| Source | ${ARTIFACT_NAME:+artifact \`$ARTIFACT_NAME\`}${ARTIFACT_NAME:-Trivy filesystem scan} |"
+            echo "| Size | $(wc -c < "$file") bytes |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload to Dependency-Track
+        uses: DependencyTrack/gh-upload-sbom@v4
+        with:
+          serverhostname: ${{ secrets.DEPENDENCYTRACK_HOSTNAME }}
+          apikey: ${{ secrets.DEPENDENCYTRACK_APIKEY }}
+          projectname: ${{ inputs.project-name }}
+          projectversion: ${{ inputs.project-version }}
+          projecttags: ${{ inputs.project-tags }}
+          parent: ${{ inputs.parent-uuid }}
+          bomfilename: ${{ steps.sbom.outputs.file }}
+          autocreate: ${{ inputs.autocreate }}
+          isLatest: ${{ inputs.is-latest }}
+
+      - name: Upload SBOM artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ inputs.project-name }}-${{ inputs.project-version }}
+          path: sbom/**
+          if-no-files-found: ignore
+          retention-days: 90
