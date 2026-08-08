@@ -16,6 +16,14 @@ name: Reusable - SBOM Publish
 # Deliberately a separate job from whatever produced the artifact: Dependency-
 # Track being unreachable, or rejecting the API key, must never take down the
 # release that produced it.
+#
+# A 403 here is not necessarily Dependency-Track. Cloudflare Bot Fight Mode
+# challenges GitHub runner traffic (Azure ASN AS8075, user agent "node") and
+# cannot be skipped with a WAF custom rule - it does not run on the Ruleset
+# Engine, so Skip/Bypass/Allow have no effect. An IP Access rule does take
+# precedence over it. This is what broke AntiRedstoneClock-Remastered 2.9.0:
+# the request never reached the server, which is why the API key's "last used"
+# timestamp never moved.
 
 on:
   workflow_call:
@@ -176,8 +184,13 @@ jobs:
               echo "::error::Dependency-Track returned 401 for the API key. The key is unknown or was rotated - update the DEPENDENCYTRACK_APIKEY secret."
               exit 1 ;;
             403)
-              echo "::error::Dependency-Track authenticated the key but refused /team/self (403). The key's team is missing a permission."
-              cat /tmp/dt-body || true
+              echo "::error::Got 403 from $DT_HOST."
+              if grep -qiE 'cloudflare|cf-ray|challenge' /tmp/dt-body 2>/dev/null; then
+                echo "::error::The response is a Cloudflare challenge page, not Dependency-Track. Bot Fight Mode challenges GitHub runner traffic (Azure ASN AS8075, user agent 'node') and cannot be skipped by a WAF custom rule. Add an IP Access rule that matches the runner traffic, or turn Bot Fight Mode off for this zone."
+              else
+                echo "::error::Dependency-Track authenticated the key but refused /team/self. The key's team is missing a permission."
+              fi
+              head -c 800 /tmp/dt-body || true
               exit 1 ;;
             000)
               echo "::error::Could not reach $DT_HOST at all."

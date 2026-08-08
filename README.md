@@ -296,6 +296,17 @@ artifact.
 **`PROJECT_CREATION_UPLOAD`** on top of `BOM_UPLOAD`. Without it the server
 answers `403` the first time any new version is uploaded.
 
+> **A `403` is often not Dependency-Track at all.** If the instance sits behind
+> Cloudflare with **Bot Fight Mode** on, runner traffic gets a managed
+> challenge — Azure ASN `AS8075`, user agent `node` — and the request never
+> reaches the server. It cannot be skipped with a WAF custom rule, because Bot
+> Fight Mode does not run on the Ruleset Engine; an **IP Access rule** takes
+> precedence over it, or turn Bot Fight Mode off for that zone. Super Bot Fight
+> Mode (Pro and up) supports proper Skip rules.
+>
+> The workflow probes `/api/v1/team/self` before uploading and tells the two
+> cases apart, because `gh-upload-sbom` only ever reports the bare status code.
+
 ### Scan for vulnerabilities (Trivy)
 
 ```yaml
