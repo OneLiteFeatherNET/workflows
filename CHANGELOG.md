@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.6.0](https://github.com/OneLiteFeatherNET/workflows/compare/v2.5.0...v2.6.0) (2026-08-08)
+
+
+### Features
+
+* add reusable SBOM publish and Trivy security scan workflows ([#23](https://github.com/OneLiteFeatherNET/workflows/issues/23)) ([e5c73b3](https://github.com/OneLiteFeatherNET/workflows/commit/e5c73b3d0944ffd403de934bbfff36bcbb160798))
+
 ## [2.5.0](https://github.com/OneLiteFeatherNET/workflows/compare/v2.4.0...v2.5.0) (2026-08-04)
 
 
