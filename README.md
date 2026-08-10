@@ -18,6 +18,8 @@ repositories by referencing a tagged release of this repo.
 | `.github/workflows/markdown-lint.yml` | Lint Markdown files with [`markdownlint-cli2`](https://github.com/DavidAnson/markdownlint-cli2-action) and check links with [`lychee`](https://github.com/lycheeverse/lychee-action). |
 | `.github/workflows/sbom-publish.yml` | Publish a CycloneDX SBOM to the OneLiteFeather [Dependency-Track](https://dependencytrack.org/) instance, so the shipped dependency inventory keeps being matched against CVEs published later. Takes the project's own SBOM via an artifact, or generates one with [Trivy](https://trivy.dev/) when the project has none. |
 | `.github/workflows/security-scan.yml` | Scan a filesystem or container image with [Trivy](https://trivy.dev/) and surface the findings in GitHub code scanning. Report-only by default, optionally gating. |
+| `.github/workflows/resourcepack-publish.yml` | Pack a Minecraft resource pack directory into a reproducible ZIP, upload it to an S3-compatible store with a `.sha256` beside each archive, and announce it on Discord. Separate release and snapshot channels. |
+| `.github/workflows/pr-lint.yml` | Enforce Conventional Commits on the PR title and on every commit of the branch, so release-please cannot silently skip a release. |
 
 ## Defaults at a glance
 
@@ -357,6 +359,69 @@ jobs:
 > `gradle.lockfile` also finds nothing — a gate on it looks green because it
 > checked nothing at all.
 
+### Publish a Minecraft resource pack
+
+Everything that ships lives in one directory (`pack-dir`, default `pack/`), whose
+contents become the ZIP root — so workflows, docs and changelog in the repository
+cannot leak into the archive.
+
+Two channels off the same logic. Snapshots on every push to the default branch:
+
+```yaml
+jobs:
+  publish:
+    # Skip the release-please merge commit, or the same version gets published twice.
+    # A GitHub expression, not a shell comparison: a commit message is attacker-controllable.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      !startsWith(github.event.head_commit.message, 'chore(main): release')
+    uses: OneLiteFeatherNET/workflows/.github/workflows/resourcepack-publish.yml@v2.7.0
+    with:
+      channel: snapshot
+      s3-endpoint: "https://s3.onelitefeather.dev"
+      bucket: "my-pack"
+    secrets: inherit
+```
+
+Releases chained off `release-please`:
+
+```yaml
+jobs:
+  release-please:
+    uses: OneLiteFeatherNET/workflows/.github/workflows/release-please.yml@v2.7.0
+
+  publish:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    uses: OneLiteFeatherNET/workflows/.github/workflows/resourcepack-publish.yml@v2.7.0
+    with:
+      channel: release
+      version: ${{ needs.release-please.outputs.version }}
+      s3-endpoint: "https://s3.onelitefeather.dev"
+      bucket: "my-pack"
+    secrets: inherit
+```
+
+Chain it via `needs`/`if` rather than a tag-triggered workflow: release-please tags
+with the default `GITHUB_TOKEN`, and pushes made with that token do not trigger
+further workflows in the same repository. A tag-triggered publish would never fire.
+
+Each run writes a versioned archive, a `.sha256` beside it, and a `latest` alias
+with its own checksum file. That pairing is the point: a server points permanently
+at `<prefix>/<pack>-latest.zip` and reads the expected hash from the file next to
+it. Minecraft re-downloads a pack exactly when the hash it is handed changes, so
+the URL in the server config never has to move.
+
+The ZIP is built reproducibly (fixed file order, fixed timestamp, `zip -X`). Without
+that the SHA256 would differ on every run and every player would re-download an
+unchanged pack after every build.
+
+`s3-endpoint` is an input rather than a secret on purpose. GitHub masks secret values
+wherever they appear, so an endpoint passed as a secret renders the download URL as
+`***` in the job summary and in the logs — the two places anyone actually looks for
+it. Version the pack with release-please's `release-type: simple`, which maintains
+the `version.txt` this workflow reads.
+
 ## Required secrets
 
 Workflows that publish or read from the OneLiteFeather Maven repository expect
@@ -378,6 +443,14 @@ these secrets to be available in the caller repository (and forwarded via
 - `DEPENDENCYTRACK_APIKEY` — the key's team needs `BOM_UPLOAD`, plus `PROJECT_CREATION_UPLOAD` while `autocreate` is on
 
 `security-scan` needs no secrets at all.
+
+`resourcepack-publish` uploads to an S3-compatible store, so it expects:
+
+- `S3_ACCESS_KEY_ID`
+- `S3_SECRET_ACCESS_KEY`
+- `DISCORD_WEBHOOK` — optional; without it the upload still runs and only the announcement is skipped
+
+The endpoint and bucket are inputs, not secrets — see the resource pack section above.
 
 Signing is keyless (cosign + GitHub OIDC) — no signing secrets. The calling job
 just needs `permissions: id-token: write` when `sign: true` (the default).
