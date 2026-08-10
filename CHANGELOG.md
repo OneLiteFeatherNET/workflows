@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.7.0](https://github.com/OneLiteFeatherNET/workflows/compare/v2.6.0...v2.7.0) (2026-08-10)
+
+
+### Features
+
+* add reusable resource pack publish workflow ([#25](https://github.com/OneLiteFeatherNET/workflows/issues/25)) ([03e0355](https://github.com/OneLiteFeatherNET/workflows/commit/03e035560bb2aecdfd48d44aefc6ba58965815db))
+
 ## [2.6.0](https://github.com/OneLiteFeatherNET/workflows/compare/v2.5.0...v2.6.0) (2026-08-08)
 
 
