@@ -1,0 +1,449 @@
+name: Reusable - Resource Pack Publish
+
+# Packs a Minecraft resource pack directory into a ZIP, uploads it to an S3-compatible
+# object store (Ceph RGW, MinIO, R2, S3) and announces it on Discord.
+#
+# Two channels from the same logic:
+#   - release   -> immutable, versioned archives under `releases/`
+#   - snapshot  -> rolling builds under `snapshots/`, so development can test between releases
+#
+# Every upload also writes a `.sha256` file next to the archive, and (unless disabled) a
+# `latest` alias. That pairing is the point of the whole thing: a server can point permanently
+# at `<prefix>/<pack>-latest.zip` and read the expected hash from the file beside it. Minecraft
+# re-downloads a pack exactly when the hash it is handed changes, so a stable URL plus a
+# fetchable hash removes any need to touch server config per build.
+#
+# Toolchain-agnostic: it only turns a directory into a published archive. There is no build
+# step on purpose - a pack that needs generating should produce `pack-dir` in an upstream job.
+#
+# NOTE ON s3-endpoint: it is an input, not a secret, even though the credentials next to it are
+# secrets. GitHub masks secret values everywhere they appear, so an endpoint passed as a secret
+# would render the download URL as *** in the job summary and in every log line - the two places
+# a human actually goes looking for it. The endpoint is a public hostname; the keys are not.
+
+on:
+  workflow_call:
+    inputs:
+      channel:
+        description: "'release' for immutable versioned publishing, 'snapshot' for rolling development builds"
+        required: true
+        type: string
+      s3-endpoint:
+        description: "S3 endpoint URL, e.g. 'https://s3.example.net'. Also the base of the resulting download URL, so it must be the host clients can reach."
+        required: true
+        type: string
+      bucket:
+        description: "Target bucket name"
+        required: true
+        type: string
+      version:
+        description: "Version without a leading 'v'. Leave empty to read it from `version-file`."
+        required: false
+        type: string
+        default: ""
+      version-file:
+        description: "File holding the version when `version` is not passed. Maintained by release-please with release-type 'simple'."
+        required: false
+        type: string
+        default: "version.txt"
+      pack-dir:
+        description: "Directory whose contents become the ZIP. Its own name is not included, so pack.mcmeta ends up at the archive root where Minecraft expects it."
+        required: false
+        type: string
+        default: "pack"
+      pack-name:
+        description: "Base name for the published files. Defaults to the repository name."
+        required: false
+        type: string
+        default: ""
+      releases-prefix:
+        description: "Key prefix for the release channel"
+        required: false
+        type: string
+        default: "releases"
+      snapshots-prefix:
+        description: "Key prefix for the snapshot channel"
+        required: false
+        type: string
+        default: "snapshots"
+      latest-alias:
+        description: "Also publish a '<pack>-latest.zip' alias plus its checksum. Disable for a bucket that should only ever hold immutable keys."
+        required: false
+        type: boolean
+        default: true
+      release-url:
+        description: "Link to the GitHub release, appended to the Discord message. Release channel only."
+        required: false
+        type: string
+        default: ""
+      s3-region:
+        description: "Region / zonegroup. Ceph and MinIO usually accept the default."
+        required: false
+        type: string
+        default: "us-east-1"
+      s3-acl:
+        description: "Canned ACL applied to every object, e.g. 'public-read'. Leave empty when a bucket policy already grants public read - some backends reject ACLs outright."
+        required: false
+        type: string
+        default: ""
+      discord-username:
+        description: "Webhook sender name. Defaults to the pack name."
+        required: false
+        type: string
+        default: ""
+      discord-avatar:
+        description: "Webhook avatar URL"
+        required: false
+        type: string
+        default: ""
+      discord-thread-id:
+        description: "Post into this thread instead of the channel root"
+        required: false
+        type: string
+        default: ""
+      runs-on:
+        description: "Runner image"
+        required: false
+        type: string
+        default: "ubuntu-latest"
+    secrets:
+      S3_ACCESS_KEY_ID:
+        required: true
+      S3_SECRET_ACCESS_KEY:
+        required: true
+      DISCORD_WEBHOOK:
+        description: "Discord webhook URL. Without it the upload still runs and only the announcement is skipped."
+        required: false
+    outputs:
+      version:
+        description: "Full version of the published artifact, including the -SNAPSHOT-<sha> suffix on the snapshot channel"
+        value: ${{ jobs.publish.outputs.version }}
+      file-name:
+        description: "File name of the published archive"
+        value: ${{ jobs.publish.outputs.file-name }}
+      sha256:
+        description: "SHA256 of the archive, as handed to the Minecraft client alongside the URL"
+        value: ${{ jobs.publish.outputs.sha256 }}
+      url:
+        description: "Download URL of the versioned archive"
+        value: ${{ jobs.publish.outputs.url }}
+      latest-url:
+        description: "Download URL of the latest alias. Empty when `latest-alias` is false."
+        value: ${{ jobs.publish.outputs.latest-url }}
+
+jobs:
+  publish:
+    name: publish ${{ inputs.channel }}
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      file-name: ${{ steps.meta.outputs.file-name }}
+      sha256: ${{ steps.build.outputs.sha256 }}
+      url: ${{ steps.upload.outputs.url }}
+      latest-url: ${{ steps.upload.outputs.latest-url }}
+    env:
+      # Context values reach the scripts through env only, never interpolated into a run line.
+      # A quote character in any value would otherwise tear the shell line apart.
+      CHANNEL: ${{ inputs.channel }}
+      PACK_DIR: ${{ inputs.pack-dir }}
+      PACK_NAME: ${{ inputs.pack-name != '' && inputs.pack-name || github.event.repository.name }}
+      INPUT_VERSION: ${{ inputs.version }}
+      VERSION_FILE: ${{ inputs.version-file }}
+      RELEASE_URL: ${{ inputs.release-url }}
+      LATEST_ALIAS: ${{ inputs.latest-alias }}
+      S3_ENDPOINT: ${{ inputs.s3-endpoint }}
+      S3_BUCKET: ${{ inputs.bucket }}
+      S3_ACL: ${{ inputs.s3-acl }}
+      AWS_DEFAULT_REGION: ${{ inputs.s3-region }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+      # Declared at job level so the announce step's `if` can read it. Step-level env is not yet
+      # available in the if condition of that same step.
+      DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+      DISCORD_USERNAME: ${{ inputs.discord-username }}
+      DISCORD_AVATAR: ${{ inputs.discord-avatar }}
+      DISCORD_THREAD_ID: ${{ inputs.discord-thread-id }}
+
+    steps:
+      # A required input still arrives empty when the caller feeds it from an unset `vars.X`,
+      # and GitHub accepts that as "provided". Checking here turns a broken download URL and an
+      # opaque aws CLI authentication failure into one explicit list of what is missing.
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+          case "${CHANNEL}" in
+            release|snapshot) ;;
+            *) echo "::error::Unknown channel '${CHANNEL}'. Allowed: release, snapshot."; exit 1 ;;
+          esac
+
+          missing=""
+          [ -n "${S3_ENDPOINT}" ]           || missing="${missing} inputs.s3-endpoint"
+          [ -n "${S3_BUCKET}" ]             || missing="${missing} inputs.bucket"
+          [ -n "${AWS_ACCESS_KEY_ID}" ]     || missing="${missing} secrets.S3_ACCESS_KEY_ID"
+          [ -n "${AWS_SECRET_ACCESS_KEY}" ] || missing="${missing} secrets.S3_SECRET_ACCESS_KEY"
+          if [ -n "${missing}" ]; then
+            echo "::error::Missing or empty:${missing}"
+            echo "A required input fed from an unset repository variable arrives as an empty string."
+            exit 1
+          fi
+
+          case "${S3_ENDPOINT}" in
+            http://*|https://*) ;;
+            *) echo "::error::inputs.s3-endpoint must include a scheme, e.g. https://s3.example.net"; exit 1 ;;
+          esac
+
+          if [ -z "${DISCORD_WEBHOOK}" ]; then
+            echo "::warning::No DISCORD_WEBHOOK secret passed - publishing without an announcement."
+          fi
+
+      - uses: actions/checkout@v7
+
+      - name: Validate pack contents
+        run: |
+          set -euo pipefail
+          if [ ! -d "${PACK_DIR}" ]; then
+            echo "::error::pack-dir '${PACK_DIR}' does not exist."
+            exit 1
+          fi
+          if [ ! -f "${PACK_DIR}/pack.mcmeta" ]; then
+            echo "::error::${PACK_DIR}/pack.mcmeta is missing - that file must sit at the root of pack-dir."
+            exit 1
+          fi
+          if ! jq empty "${PACK_DIR}/pack.mcmeta" 2>/dev/null; then
+            echo "::error file=${PACK_DIR}/pack.mcmeta::Not valid JSON."
+            exit 1
+          fi
+          # Check every JSON file. A malformed model otherwise fails silently in the client:
+          # the item simply renders untextured, with nothing in any log to trace it back to.
+          invalid=0
+          while IFS= read -r f; do
+            if ! jq empty "$f" 2>/dev/null; then
+              echo "::error file=${f}::Invalid JSON."
+              invalid=1
+            fi
+          done < <(find "${PACK_DIR}" -type f -name '*.json')
+          [ "${invalid}" -eq 0 ]
+
+      - name: Resolve version and file names
+        id: meta
+        env:
+          RELEASES_PREFIX: ${{ inputs.releases-prefix }}
+          SNAPSHOTS_PREFIX: ${{ inputs.snapshots-prefix }}
+        run: |
+          set -euo pipefail
+
+          base_version="${INPUT_VERSION}"
+          if [ -z "${base_version}" ]; then
+            if [ ! -f "${VERSION_FILE}" ]; then
+              echo "::error::No version input given and version-file '${VERSION_FILE}' does not exist."
+              exit 1
+            fi
+            base_version="$(tr -d '[:space:]' < "${VERSION_FILE}")"
+          fi
+          if [ -z "${base_version}" ]; then
+            echo "::error::Could not resolve a version ('${VERSION_FILE}' is empty)."
+            exit 1
+          fi
+
+          short_sha="$(git rev-parse --short=7 HEAD)"
+          pack_description="$(jq -r '.pack.description // ""' "${PACK_DIR}/pack.mcmeta")"
+
+          if [ "${CHANNEL}" = "release" ]; then
+            version="${base_version}"
+            prefix="${RELEASES_PREFIX}"
+          else
+            # '-' instead of the SemVer '+' build separator: some clients decode '+' in a URL as
+            # a space, which makes the download link unreliable.
+            version="${base_version}-SNAPSHOT-${short_sha}"
+            prefix="${SNAPSHOTS_PREFIX}"
+          fi
+
+          if [ -n "${pack_description}" ]; then
+            if [ "${CHANNEL}" = "release" ]; then
+              description="${pack_description} ${version}"
+            else
+              description="${pack_description} ${base_version}-SNAPSHOT (${short_sha})"
+            fi
+          else
+            description=""
+          fi
+
+          {
+            echo "version=${version}"
+            echo "description=${description}"
+            echo "prefix=${prefix}"
+            echo "file-name=${PACK_NAME}-${version}.zip"
+            echo "latest-name=${PACK_NAME}-latest.zip"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Stamp version into pack.mcmeta
+        if: steps.meta.outputs.description != ''
+        env:
+          DESCRIPTION: ${{ steps.meta.outputs.description }}
+        run: |
+          set -euo pipefail
+          jq --arg d "${DESCRIPTION}" '.pack.description = $d' \
+            "${PACK_DIR}/pack.mcmeta" > "${PACK_DIR}/pack.mcmeta.tmp"
+          mv "${PACK_DIR}/pack.mcmeta.tmp" "${PACK_DIR}/pack.mcmeta"
+          echo "Pack description: ${DESCRIPTION}"
+
+      # Build reproducibly: fixed file order, fixed timestamp, no extra fields. Without this the
+      # SHA256 changes on every run, and since the client compares hashes, every player would
+      # re-download an unchanged pack after every build.
+      - name: Build ZIP
+        id: build
+        env:
+          TZ: UTC
+          FILE_NAME: ${{ steps.meta.outputs.file-name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          zip_path="${PWD}/dist/${FILE_NAME}"
+          file_list="${RUNNER_TEMP}/filelist.txt"
+
+          cd "${PACK_DIR}"
+          find . -type f | sed 's|^\./||' | LC_ALL=C sort > "${file_list}"
+          count="$(wc -l < "${file_list}")"
+          if [ "${count}" -eq 0 ]; then
+            echo "::error::'${PACK_DIR}' contains no files."
+            exit 1
+          fi
+          echo "Files in pack: ${count}"
+          xargs -a "${file_list}" -d '\n' touch -t 198001011200
+          zip -X -9 -q "${zip_path}" -@ < "${file_list}"
+          cd - > /dev/null
+
+          sha256="$(sha256sum "${zip_path}" | cut -d' ' -f1)"
+          printf '%s  %s\n' "${sha256}" "${FILE_NAME}" > "${zip_path}.sha256"
+
+          {
+            echo "zip-path=${zip_path}"
+            echo "sha256=${sha256}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "SHA256: ${sha256}"
+
+      - name: Upload to S3
+        id: upload
+        env:
+          PREFIX: ${{ steps.meta.outputs.prefix }}
+          FILE_NAME: ${{ steps.meta.outputs.file-name }}
+          LATEST_NAME: ${{ steps.meta.outputs.latest-name }}
+          ZIP_PATH: ${{ steps.build.outputs.zip-path }}
+          SHA256: ${{ steps.build.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+
+          endpoint="${S3_ENDPOINT%/}"
+
+          acl_args=()
+          if [ -n "${S3_ACL}" ]; then
+            acl_args=(--acl "${S3_ACL}")
+          fi
+
+          upload() {
+            local src="$1" key="$2" ctype="$3" cache="$4"
+            aws --endpoint-url "${endpoint}" s3 cp "${src}" "s3://${S3_BUCKET}/${key}" \
+              --content-type "${ctype}" --cache-control "${cache}" \
+              --no-progress "${acl_args[@]}"
+          }
+
+          # Versioned keys never change and may be cached indefinitely.
+          immutable="public, max-age=31536000, immutable"
+          # The alias is overwritten, so it must not be served from a stale proxy cache.
+          mutable="public, max-age=60, must-revalidate"
+
+          upload "${ZIP_PATH}"        "${PREFIX}/${FILE_NAME}"        "application/zip" "${immutable}"
+          upload "${ZIP_PATH}.sha256" "${PREFIX}/${FILE_NAME}.sha256" "text/plain"      "${immutable}"
+          echo "url=${endpoint}/${S3_BUCKET}/${PREFIX}/${FILE_NAME}" >> "$GITHUB_OUTPUT"
+
+          if [ "${LATEST_ALIAS}" = "true" ]; then
+            # The alias needs its own checksum file: `sha256sum -c` matches on the file name
+            # recorded inside it, so reusing the versioned one would fail the check.
+            printf '%s  %s\n' "${SHA256}" "${LATEST_NAME}" > "${RUNNER_TEMP}/latest.sha256"
+            upload "${ZIP_PATH}"                  "${PREFIX}/${LATEST_NAME}"        "application/zip" "${mutable}"
+            upload "${RUNNER_TEMP}/latest.sha256" "${PREFIX}/${LATEST_NAME}.sha256" "text/plain"      "${mutable}"
+            echo "latest-url=${endpoint}/${S3_BUCKET}/${PREFIX}/${LATEST_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "latest-url=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Announce on Discord
+        if: env.DISCORD_WEBHOOK != ''
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          SHA256: ${{ steps.build.outputs.sha256 }}
+          DOWNLOAD_URL: ${{ steps.upload.outputs.url }}
+          LATEST_URL: ${{ steps.upload.outputs.latest-url }}
+        run: |
+          set -euo pipefail
+
+          if [ "${CHANNEL}" = "release" ]; then
+            title="📦 ${PACK_NAME} ${VERSION} released"
+            color=5763719   # green
+          else
+            title="🧪 ${PACK_NAME} snapshot ${VERSION}"
+            color=16705372  # yellow
+          fi
+
+          description="$(printf '%s\n' \
+            "**Download**" \
+            "${DOWNLOAD_URL}" \
+            "" \
+            "**SHA256**" \
+            '```' \
+            "${SHA256}" \
+            '```')"
+
+          if [ -n "${LATEST_URL}" ]; then
+            description="${description}"$'\n'"**Always current:** ${LATEST_URL}"
+          fi
+          if [ -n "${RELEASE_URL}" ]; then
+            description="${description}"$'\n'"**Changelog:** ${RELEASE_URL}"
+          fi
+
+          username="${DISCORD_USERNAME:-${PACK_NAME}}"
+
+          jq -n \
+            --arg username "${username}" \
+            --arg avatar "${DISCORD_AVATAR}" \
+            --arg title "${title}" \
+            --arg description "${description}" \
+            --argjson color "${color}" \
+            '{
+              username: $username,
+              embeds: [{ title: $title, description: $description, color: $color }]
+            }
+            + (if $avatar == "" then {} else { avatar_url: $avatar } end)' \
+            > "${RUNNER_TEMP}/discord.json"
+
+          url="${DISCORD_WEBHOOK}"
+          if [ -n "${DISCORD_THREAD_ID}" ]; then
+            url="${url}?thread_id=${DISCORD_THREAD_ID}"
+          fi
+
+          curl --silent --show-error --fail \
+            --header "Content-Type: application/json" \
+            --data @"${RUNNER_TEMP}/discord.json" \
+            "${url}"
+          echo "Discord announcement sent."
+
+      - name: Job summary
+        if: always()
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          SHA256: ${{ steps.build.outputs.sha256 }}
+          DOWNLOAD_URL: ${{ steps.upload.outputs.url }}
+          LATEST_URL: ${{ steps.upload.outputs.latest-url }}
+        run: |
+          {
+            echo "### ${PACK_NAME} · ${CHANNEL} · ${VERSION}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Download | ${DOWNLOAD_URL} |"
+            [ -n "${LATEST_URL}" ] && echo "| Latest | ${LATEST_URL} |"
+            echo "| SHA256 | \`${SHA256}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
