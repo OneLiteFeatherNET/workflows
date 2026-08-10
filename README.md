@@ -18,7 +18,7 @@ repositories by referencing a tagged release of this repo.
 | `.github/workflows/markdown-lint.yml` | Lint Markdown files with [`markdownlint-cli2`](https://github.com/DavidAnson/markdownlint-cli2-action) and check links with [`lychee`](https://github.com/lycheeverse/lychee-action). |
 | `.github/workflows/sbom-publish.yml` | Publish a CycloneDX SBOM to the OneLiteFeather [Dependency-Track](https://dependencytrack.org/) instance, so the shipped dependency inventory keeps being matched against CVEs published later. Takes the project's own SBOM via an artifact, or generates one with [Trivy](https://trivy.dev/) when the project has none. |
 | `.github/workflows/security-scan.yml` | Scan a filesystem or container image with [Trivy](https://trivy.dev/) and surface the findings in GitHub code scanning. Report-only by default, optionally gating. |
-| `.github/workflows/resourcepack-publish.yml` | Pack a Minecraft resource pack directory into a reproducible ZIP, upload it to an S3-compatible store with a `.sha256` beside each archive, and announce it on Discord. Separate release and snapshot channels. |
+| `.github/workflows/resourcepack-publish.yml` | Pack a Minecraft resource pack directory into a reproducible ZIP, upload it to an S3-compatible store with a `.sha1`, a `.sha256` and a JSON manifest beside each archive, and announce it on Discord. Separate release and snapshot channels. |
 | `.github/workflows/pr-lint.yml` | Enforce Conventional Commits on the PR title and on every commit of the branch, so release-please cannot silently skip a release. |
 
 ## Defaults at a glance
@@ -406,15 +406,63 @@ Chain it via `needs`/`if` rather than a tag-triggered workflow: release-please t
 with the default `GITHUB_TOKEN`, and pushes made with that token do not trigger
 further workflows in the same repository. A tag-triggered publish would never fire.
 
-Each run writes a versioned archive, a `.sha256` beside it, and a `latest` alias
-with its own checksum file. That pairing is the point: a server points permanently
-at `<prefix>/<pack>-latest.zip` and reads the expected hash from the file next to
-it. Minecraft re-downloads a pack exactly when the hash it is handed changes, so
-the URL in the server config never has to move.
+Each run writes a versioned archive plus a `.sha1`, a `.sha256` and a `.json`
+manifest beside it, and a `latest` alias carrying its own copies of all three:
+
+```text
+releases/my-pack-1.4.2.zip          releases/my-pack-latest.zip
+releases/my-pack-1.4.2.zip.sha1     releases/my-pack-latest.zip.sha1
+releases/my-pack-1.4.2.zip.sha256   releases/my-pack-latest.zip.sha256
+releases/my-pack-1.4.2.zip.json     releases/my-pack-latest.zip.json
+```
+
+That pairing is the point: a server points permanently at
+`<prefix>/<pack>-latest.zip` and reads the expected hash from the file next to it.
+Minecraft re-downloads a pack exactly when the hash it is handed changes, so the URL
+in the server config never has to move.
+
+**SHA-1 is the functional hash.** `resource-pack-sha1` in `server.properties` and the
+second argument of `setResourcePack(url, hash)` are both SHA-1, so that is the value
+a server actually hands the client — it is what the workflow prints first in Discord
+and in the job summary. SHA256 sits next to it purely as an integrity check for
+anything verifying the download itself. Both files are in `sha1sum -c` / `sha256sum -c`
+format, and the alias' checksum files record the alias' own file name so `-c` passes
+against either copy.
+
+The manifest is the machine-readable form of all of it — one request instead of
+parsing two text files:
+
+```json
+{
+  "schemaVersion": 1,
+  "pack": "my-pack",
+  "channel": "release",
+  "version": "1.4.2",
+  "file": "my-pack-latest.zip",
+  "url": "https://s3.onelitefeather.dev/my-pack/releases/my-pack-latest.zip",
+  "size": 4823019,
+  "commit": "7f2094c",
+  "builtAt": "2026-08-10T10:56:03Z",
+  "hashes": { "sha1": "628821c8…", "sha256": "703de715…" }
+}
+```
+
+The `latest` manifest resolves which version the alias currently points at, which no
+checksum file can express. `hashes` is an object rather than flat fields, so another
+algorithm is one more key and not a schema break; `schemaVersion` marks a real break
+if one ever happens.
+
+Which algorithms get published is the `HASH_ALGOS` list at the top of the job — the
+only place in the workflow that names one. Checksum files, manifest entries, the
+Discord message and the job summary are all derived from it, so adding `sha512` means
+adding it to that list and declaring the matching output (GitHub requires `outputs:`
+to be static). Discord and the summary read their values out of the manifest rather
+than naming hashes themselves.
 
 The ZIP is built reproducibly (fixed file order, fixed timestamp, `zip -X`). Without
-that the SHA256 would differ on every run and every player would re-download an
-unchanged pack after every build.
+that the hashes would differ on every run and every player would re-download an
+unchanged pack after every build. The manifest carries a build timestamp and so does
+differ per run — it is metadata about the archive, not part of it.
 
 `s3-endpoint` is an input rather than a secret on purpose. GitHub masks secret values
 wherever they appear, so an endpoint passed as a secret renders the download URL as

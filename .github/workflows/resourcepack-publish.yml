@@ -7,11 +7,23 @@ name: Reusable - Resource Pack Publish
 #   - release   -> immutable, versioned archives under `releases/`
 #   - snapshot  -> rolling builds under `snapshots/`, so development can test between releases
 #
-# Every upload also writes a `.sha256` file next to the archive, and (unless disabled) a
-# `latest` alias. That pairing is the point of the whole thing: a server can point permanently
-# at `<prefix>/<pack>-latest.zip` and read the expected hash from the file beside it. Minecraft
+# Every archive is published with a checksum file per algorithm in `HASH_ALGOS` plus a JSON
+# manifest, and (unless disabled) a `latest` alias carrying its own copies of all three.
+# That pairing is the point of the whole thing: a server can point permanently at
+# `<prefix>/<pack>-latest.zip` and read the expected hash from the file beside it. Minecraft
 # re-downloads a pack exactly when the hash it is handed changes, so a stable URL plus a
 # fetchable hash removes any need to touch server config per build.
+#
+# NOTE ON THE TWO HASHES: SHA-1 is the functional one - `resource-pack-sha1` in
+# server.properties and the second argument of `setResourcePack(url, hash)` are both SHA-1,
+# so that is the value a server actually hands the client. SHA256 is carried alongside it
+# purely as an integrity check for anything that verifies the download itself. Adding a third
+# algorithm means one entry in `HASH_ALGOS` and one more `outputs:` declaration - nothing else
+# in this file names an algorithm.
+#
+# The `<archive>.json` manifest is the machine-readable form of all of it: version, URL, size,
+# commit and every hash in one request. The `latest` manifest also resolves which version the
+# alias currently points at, which no checksum file can express.
 #
 # Toolchain-agnostic: it only turns a directory into a published archive. There is no build
 # step on purpose - a pack that needs generating should produce `pack-dir` in an upstream job.
@@ -67,7 +79,7 @@ on:
         type: string
         default: "snapshots"
       latest-alias:
-        description: "Also publish a '<pack>-latest.zip' alias plus its checksum. Disable for a bucket that should only ever hold immutable keys."
+        description: "Also publish a '<pack>-latest.zip' alias plus its checksums and manifest. Disable for a bucket that should only ever hold immutable keys."
         required: false
         type: boolean
         default: true
@@ -121,15 +133,24 @@ on:
       file-name:
         description: "File name of the published archive"
         value: ${{ jobs.publish.outputs.file-name }}
+      sha1:
+        description: "SHA-1 of the archive - the hash a Minecraft server hands the client ('resource-pack-sha1')"
+        value: ${{ jobs.publish.outputs.sha1 }}
       sha256:
-        description: "SHA256 of the archive, as handed to the Minecraft client alongside the URL"
+        description: "SHA256 of the archive, for integrity verification of the download"
         value: ${{ jobs.publish.outputs.sha256 }}
       url:
         description: "Download URL of the versioned archive"
         value: ${{ jobs.publish.outputs.url }}
+      manifest-url:
+        description: "URL of the versioned archive's JSON manifest"
+        value: ${{ jobs.publish.outputs.manifest-url }}
       latest-url:
         description: "Download URL of the latest alias. Empty when `latest-alias` is false."
         value: ${{ jobs.publish.outputs.latest-url }}
+      latest-manifest-url:
+        description: "URL of the latest alias' JSON manifest, which also resolves the version it currently points at. Empty when `latest-alias` is false."
+        value: ${{ jobs.publish.outputs.latest-manifest-url }}
 
 jobs:
   publish:
@@ -140,10 +161,20 @@ jobs:
     outputs:
       version: ${{ steps.meta.outputs.version }}
       file-name: ${{ steps.meta.outputs.file-name }}
+      sha1: ${{ steps.build.outputs.sha1 }}
       sha256: ${{ steps.build.outputs.sha256 }}
-      url: ${{ steps.upload.outputs.url }}
-      latest-url: ${{ steps.upload.outputs.latest-url }}
+      url: ${{ steps.meta.outputs.url }}
+      manifest-url: ${{ steps.meta.outputs.manifest-url }}
+      latest-url: ${{ steps.meta.outputs.latest-url }}
+      latest-manifest-url: ${{ steps.meta.outputs.latest-manifest-url }}
     env:
+      # The one place an algorithm is named. Adding one here publishes a `.<algo>` file next to
+      # every archive, adds it to the manifest, and prints it in Discord and the job summary -
+      # all of that is driven off this list. The only manual follow-up is a matching entry in
+      # the job's and the workflow's `outputs:` blocks, which GitHub requires to be static.
+      # Order matters: it is the order everything is displayed in, and SHA-1 leads because that
+      # is the value someone copies into a server config.
+      HASH_ALGOS: "sha1 sha256"
       # Context values reach the scripts through env only, never interpolated into a run line.
       # A quote character in any value would otherwise tear the shell line apart.
       CHANNEL: ${{ inputs.channel }}
@@ -194,6 +225,14 @@ jobs:
             *) echo "::error::inputs.s3-endpoint must include a scheme, e.g. https://s3.example.net"; exit 1 ;;
           esac
 
+          # Catch a typo in HASH_ALGOS here rather than three steps later, halfway through a build.
+          [ -n "${HASH_ALGOS// /}" ] || { echo "::error::HASH_ALGOS is empty."; exit 1; }
+          for algo in ${HASH_ALGOS}; do
+            command -v "${algo}sum" > /dev/null \
+              || { echo "::error::HASH_ALGOS lists '${algo}', but '${algo}sum' does not exist on this runner."; exit 1; }
+          done
+          echo "Hash algorithms: ${HASH_ALGOS}"
+
           if [ -z "${DISCORD_WEBHOOK}" ]; then
             echo "::warning::No DISCORD_WEBHOOK secret passed - publishing without an announcement."
           fi
@@ -226,7 +265,11 @@ jobs:
           done < <(find "${PACK_DIR}" -type f -name '*.json')
           [ "${invalid}" -eq 0 ]
 
-      - name: Resolve version and file names
+      # Every name and every URL is derived here, in one place. The endpoint, the bucket and the
+      # prefix are plain inputs, so none of it has to wait for the upload to have happened - which
+      # is what lets the build step write a finished manifest instead of the upload step stitching
+      # metadata together afterwards.
+      - name: Resolve version, file names and URLs
         id: meta
         env:
           RELEASES_PREFIX: ${{ inputs.releases-prefix }}
@@ -270,12 +313,26 @@ jobs:
             description=""
           fi
 
+          file_name="${PACK_NAME}-${version}.zip"
+          latest_name="${PACK_NAME}-latest.zip"
+          base_url="${S3_ENDPOINT%/}/${S3_BUCKET}/${prefix}"
+
           {
             echo "version=${version}"
+            echo "short-sha=${short_sha}"
             echo "description=${description}"
             echo "prefix=${prefix}"
-            echo "file-name=${PACK_NAME}-${version}.zip"
-            echo "latest-name=${PACK_NAME}-latest.zip"
+            echo "file-name=${file_name}"
+            echo "latest-name=${latest_name}"
+            echo "url=${base_url}/${file_name}"
+            echo "manifest-url=${base_url}/${file_name}.json"
+            if [ "${LATEST_ALIAS}" = "true" ]; then
+              echo "latest-url=${base_url}/${latest_name}"
+              echo "latest-manifest-url=${base_url}/${latest_name}.json"
+            else
+              echo "latest-url="
+              echo "latest-manifest-url="
+            fi
           } >> "$GITHUB_OUTPUT"
 
       - name: Stamp version into pack.mcmeta
@@ -290,17 +347,31 @@ jobs:
           echo "Pack description: ${DESCRIPTION}"
 
       # Build reproducibly: fixed file order, fixed timestamp, no extra fields. Without this the
-      # SHA256 changes on every run, and since the client compares hashes, every player would
-      # re-download an unchanged pack after every build.
-      - name: Build ZIP
+      # hashes change on every run, and since the client compares hashes, every player would
+      # re-download an unchanged pack after every build. (The manifest carries a build timestamp
+      # and therefore differs per run - it is metadata about the archive, not part of it.)
+      #
+      # This step also writes the upload plan: which local file goes to which key, with which
+      # content type and cache policy. Deciding that here keeps "what gets published" in one
+      # place and leaves the upload step purely mechanical.
+      - name: Build ZIP, checksums and manifest
         id: build
         env:
           TZ: UTC
+          VERSION: ${{ steps.meta.outputs.version }}
+          SHORT_SHA: ${{ steps.meta.outputs.short-sha }}
+          PREFIX: ${{ steps.meta.outputs.prefix }}
           FILE_NAME: ${{ steps.meta.outputs.file-name }}
+          LATEST_NAME: ${{ steps.meta.outputs.latest-name }}
+          URL: ${{ steps.meta.outputs.url }}
+          LATEST_URL: ${{ steps.meta.outputs.latest-url }}
         run: |
           set -euo pipefail
-          mkdir -p dist
+          read -r -a algos <<< "${HASH_ALGOS}"
+
+          mkdir -p dist dist/latest
           zip_path="${PWD}/dist/${FILE_NAME}"
+          latest_dir="${PWD}/dist/latest"
           file_list="${RUNNER_TEMP}/filelist.txt"
 
           cd "${PACK_DIR}"
@@ -315,24 +386,84 @@ jobs:
           zip -X -9 -q "${zip_path}" -@ < "${file_list}"
           cd - > /dev/null
 
-          sha256="$(sha256sum "${zip_path}" | cut -d' ' -f1)"
-          printf '%s  %s\n' "${sha256}" "${FILE_NAME}" > "${zip_path}.sha256"
+          # One checksum file per algorithm, in `<algo>sum -c` format. The name recorded inside
+          # has to match the file it sits next to, so the alias gets its own copies further down
+          # rather than reusing the versioned ones.
+          declare -A sums=()
+          hashes_json='{}'
+          for algo in "${algos[@]}"; do
+            sum="$("${algo}sum" "${zip_path}" | cut -d' ' -f1)"
+            sums["${algo}"]="${sum}"
+            printf '%s  %s\n' "${sum}" "${FILE_NAME}" > "${zip_path}.${algo}"
+            echo "${algo}=${sum}" >> "$GITHUB_OUTPUT"
+            hashes_json="$(jq -c --arg a "${algo}" --arg v "${sum}" '. + {($a): $v}' <<< "${hashes_json}")"
+            echo "${algo}: ${sum}"
+          done
+
+          size="$(stat -c%s "${zip_path}")"
+          built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          write_manifest() {
+            local out="$1" file="$2" url="$3"
+            jq -n \
+              --arg pack "${PACK_NAME}" \
+              --arg channel "${CHANNEL}" \
+              --arg version "${VERSION}" \
+              --arg file "${file}" \
+              --arg url "${url}" \
+              --argjson size "${size}" \
+              --arg commit "${SHORT_SHA}" \
+              --arg builtAt "${built_at}" \
+              --argjson hashes "${hashes_json}" \
+              '{
+                schemaVersion: 1,
+                pack: $pack,
+                channel: $channel,
+                version: $version,
+                file: $file,
+                url: $url,
+                size: $size,
+                commit: $commit,
+                builtAt: $builtAt,
+                hashes: $hashes
+              }' > "${out}"
+          }
+          write_manifest "${zip_path}.json" "${FILE_NAME}" "${URL}"
+
+          plan="${RUNNER_TEMP}/uploads.tsv"
+          : > "${plan}"
+          add_upload() { printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >> "${plan}"; }
+
+          # Versioned keys never change and may be cached indefinitely.
+          immutable="public, max-age=31536000, immutable"
+          # The alias is overwritten, so it must not be served from a stale proxy cache.
+          mutable="public, max-age=60, must-revalidate"
+
+          add_upload "${zip_path}"      "${PREFIX}/${FILE_NAME}"      "application/zip"  "${immutable}"
+          add_upload "${zip_path}.json" "${PREFIX}/${FILE_NAME}.json" "application/json" "${immutable}"
+          for algo in "${algos[@]}"; do
+            add_upload "${zip_path}.${algo}" "${PREFIX}/${FILE_NAME}.${algo}" "text/plain" "${immutable}"
+          done
+
+          if [ "${LATEST_ALIAS}" = "true" ]; then
+            for algo in "${algos[@]}"; do
+              printf '%s  %s\n' "${sums[${algo}]}" "${LATEST_NAME}" > "${latest_dir}/${LATEST_NAME}.${algo}"
+              add_upload "${latest_dir}/${LATEST_NAME}.${algo}" "${PREFIX}/${LATEST_NAME}.${algo}" "text/plain" "${mutable}"
+            done
+            write_manifest "${latest_dir}/${LATEST_NAME}.json" "${LATEST_NAME}" "${LATEST_URL}"
+            add_upload "${zip_path}"                          "${PREFIX}/${LATEST_NAME}"      "application/zip"  "${mutable}"
+            add_upload "${latest_dir}/${LATEST_NAME}.json"    "${PREFIX}/${LATEST_NAME}.json" "application/json" "${mutable}"
+          fi
 
           {
             echo "zip-path=${zip_path}"
-            echo "sha256=${sha256}"
+            echo "manifest-path=${zip_path}.json"
+            echo "upload-plan=${plan}"
           } >> "$GITHUB_OUTPUT"
 
-          echo "SHA256: ${sha256}"
-
       - name: Upload to S3
-        id: upload
         env:
-          PREFIX: ${{ steps.meta.outputs.prefix }}
-          FILE_NAME: ${{ steps.meta.outputs.file-name }}
-          LATEST_NAME: ${{ steps.meta.outputs.latest-name }}
-          ZIP_PATH: ${{ steps.build.outputs.zip-path }}
-          SHA256: ${{ steps.build.outputs.sha256 }}
+          UPLOAD_PLAN: ${{ steps.build.outputs.upload-plan }}
         run: |
           set -euo pipefail
 
@@ -343,40 +474,25 @@ jobs:
             acl_args=(--acl "${S3_ACL}")
           fi
 
-          upload() {
-            local src="$1" key="$2" ctype="$3" cache="$4"
+          # `< /dev/null` on the aws call: the loop is fed by the plan on stdin, and a child
+          # process reading from it would swallow the remaining lines.
+          while IFS=$'\t' read -r src key ctype cache; do
+            [ -n "${src}" ] || continue
+            echo "-> ${key}"
             aws --endpoint-url "${endpoint}" s3 cp "${src}" "s3://${S3_BUCKET}/${key}" \
               --content-type "${ctype}" --cache-control "${cache}" \
-              --no-progress "${acl_args[@]}"
-          }
+              --no-progress "${acl_args[@]}" < /dev/null
+          done < "${UPLOAD_PLAN}"
 
-          # Versioned keys never change and may be cached indefinitely.
-          immutable="public, max-age=31536000, immutable"
-          # The alias is overwritten, so it must not be served from a stale proxy cache.
-          mutable="public, max-age=60, must-revalidate"
-
-          upload "${ZIP_PATH}"        "${PREFIX}/${FILE_NAME}"        "application/zip" "${immutable}"
-          upload "${ZIP_PATH}.sha256" "${PREFIX}/${FILE_NAME}.sha256" "text/plain"      "${immutable}"
-          echo "url=${endpoint}/${S3_BUCKET}/${PREFIX}/${FILE_NAME}" >> "$GITHUB_OUTPUT"
-
-          if [ "${LATEST_ALIAS}" = "true" ]; then
-            # The alias needs its own checksum file: `sha256sum -c` matches on the file name
-            # recorded inside it, so reusing the versioned one would fail the check.
-            printf '%s  %s\n' "${SHA256}" "${LATEST_NAME}" > "${RUNNER_TEMP}/latest.sha256"
-            upload "${ZIP_PATH}"                  "${PREFIX}/${LATEST_NAME}"        "application/zip" "${mutable}"
-            upload "${RUNNER_TEMP}/latest.sha256" "${PREFIX}/${LATEST_NAME}.sha256" "text/plain"      "${mutable}"
-            echo "latest-url=${endpoint}/${S3_BUCKET}/${PREFIX}/${LATEST_NAME}" >> "$GITHUB_OUTPUT"
-          else
-            echo "latest-url=" >> "$GITHUB_OUTPUT"
-          fi
-
+      # Discord and the job summary read their hashes out of the manifest rather than naming
+      # them, so a new entry in HASH_ALGOS shows up in both without either being touched.
       - name: Announce on Discord
         if: env.DISCORD_WEBHOOK != ''
         env:
           VERSION: ${{ steps.meta.outputs.version }}
-          SHA256: ${{ steps.build.outputs.sha256 }}
-          DOWNLOAD_URL: ${{ steps.upload.outputs.url }}
-          LATEST_URL: ${{ steps.upload.outputs.latest-url }}
+          MANIFEST: ${{ steps.build.outputs.manifest-path }}
+          DOWNLOAD_URL: ${{ steps.meta.outputs.url }}
+          LATEST_URL: ${{ steps.meta.outputs.latest-url }}
         run: |
           set -euo pipefail
 
@@ -388,14 +504,17 @@ jobs:
             color=16705372  # yellow
           fi
 
+          hash_block="$(jq -r '
+            .hashes | to_entries[]
+            | "**\(.key | ascii_upcase | sub("^SHA"; "SHA-"))**\n```\n\(.value)\n```"
+          ' "${MANIFEST}")"
+
           description="$(printf '%s\n' \
             "**Download**" \
             "${DOWNLOAD_URL}" \
             "" \
-            "**SHA256**" \
-            '```' \
-            "${SHA256}" \
-            '```')"
+            "${hash_block}" \
+            '_SHA-1 is the value a server hands the client (`resource-pack-sha1`)._')"
 
           if [ -n "${LATEST_URL}" ]; then
             description="${description}"$'\n'"**Always current:** ${LATEST_URL}"
@@ -434,9 +553,10 @@ jobs:
         if: always()
         env:
           VERSION: ${{ steps.meta.outputs.version }}
-          SHA256: ${{ steps.build.outputs.sha256 }}
-          DOWNLOAD_URL: ${{ steps.upload.outputs.url }}
-          LATEST_URL: ${{ steps.upload.outputs.latest-url }}
+          MANIFEST: ${{ steps.build.outputs.manifest-path }}
+          DOWNLOAD_URL: ${{ steps.meta.outputs.url }}
+          MANIFEST_URL: ${{ steps.meta.outputs.manifest-url }}
+          LATEST_URL: ${{ steps.meta.outputs.latest-url }}
         run: |
           {
             echo "### ${PACK_NAME} · ${CHANNEL} · ${VERSION}"
@@ -445,5 +565,11 @@ jobs:
             echo "|---|---|"
             echo "| Download | ${DOWNLOAD_URL} |"
             [ -n "${LATEST_URL}" ] && echo "| Latest | ${LATEST_URL} |"
-            echo "| SHA256 | \`${SHA256}\` |"
+            echo "| Manifest | ${MANIFEST_URL} |"
+            if [ -f "${MANIFEST}" ]; then
+              jq -r '
+                .hashes | to_entries[]
+                | "| \(.key | ascii_upcase | sub("^SHA"; "SHA-")) | `\(.value)` |"
+              ' "${MANIFEST}"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
