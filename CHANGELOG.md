@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.8.0](https://github.com/OneLiteFeatherNET/workflows/compare/v2.7.0...v2.8.0) (2026-08-10)
+
+
+### Features
+
+* **resourcepack:** publish SHA-1 and a JSON manifest alongside SHA256 ([#27](https://github.com/OneLiteFeatherNET/workflows/issues/27)) ([01215ee](https://github.com/OneLiteFeatherNET/workflows/commit/01215eeaa1c061b09e2f5991a627681a4cea8b66))
+
 ## [2.7.0](https://github.com/OneLiteFeatherNET/workflows/compare/v2.6.0...v2.7.0) (2026-08-10)
 
 
