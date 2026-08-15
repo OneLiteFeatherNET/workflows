@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.8.1](https://github.com/OneLiteFeatherNET/workflows/compare/v2.8.0...v2.8.1) (2026-08-15)
+
+
+### Bug Fixes
+
+* **docker-publish:** scope the concurrency group to the image ([#29](https://github.com/OneLiteFeatherNET/workflows/issues/29)) ([372e8da](https://github.com/OneLiteFeatherNET/workflows/commit/372e8da2086a961ba542e1624e513e8ba717e05e))
+
 ## [2.8.0](https://github.com/OneLiteFeatherNET/workflows/compare/v2.7.0...v2.8.0) (2026-08-10)
 
 
