@@ -92,7 +92,15 @@ on:
         value: ${{ jobs.docker.outputs.digest }}
 
 concurrency:
-  group: docker-publish-${{ github.workflow }}-${{ github.ref }}
+  # Scoped to the image, not just the workflow and ref. A caller that publishes several
+  # images from one workflow -- six, in Apus' case -- would otherwise put every one of
+  # those calls into a single group, where queuing one cancels the others still pending;
+  # only one or two of the six survived. Two runs pushing the SAME image still serialise,
+  # which is what this group is for: cancel-in-progress stays false because aborting
+  # mid-upload can leave an inconsistent artifact behind (see design-principles.md).
+  # Callers publishing a single image are unaffected -- their group merely gains a
+  # constant suffix.
+  group: docker-publish-${{ github.workflow }}-${{ github.ref }}-${{ inputs.image-name }}
   cancel-in-progress: false
 
 permissions:
