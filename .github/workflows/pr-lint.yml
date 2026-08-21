@@ -1,69 +1,17 @@
-name: Reusable - PR Lint
+name: PR Lint
 
-# Enforces Conventional Commits (https://www.conventionalcommits.org) on both the PR title and
-# every commit on the branch. Intended for repos using release-please, which parses commit types
-# to decide version bumps and changelog sections - a non-conventional commit silently fails to
-# bump the version or gets dropped from the changelog.
-#
-# The calling repo must provide its own `commitlint.config.mjs` at its root (normally just
-# `extends: ['@commitlint/config-conventional']` plus any repo-specific rule overrides) - kept
-# there rather than embedded here so each repo can extend/relax rules independently.
-
+# Conventional Commits on the PR title and every commit on the branch.
+# release-please parses those commit types to decide the version bump and to
+# build the changelog - a non-conventional commit silently produces neither.
 on:
-  workflow_call:
-    inputs:
-      types:
-        description: "Newline-separated list of allowed Conventional Commit types for the PR title check."
-        required: false
-        type: string
-        default: |
-          build
-          chore
-          ci
-          docs
-          feat
-          fix
-          perf
-          refactor
-          revert
-          style
-          test
-      require-scope:
-        description: "Whether the PR title must include a scope, e.g. feat(api): ..."
-        required: false
-        type: boolean
-        default: false
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
 
 permissions:
   contents: read
   pull-requests: read
 
 jobs:
-  pr-title:
-    name: Conventional PR title
-    runs-on: ubuntu-latest
-    steps:
-      - uses: amannn/action-semantic-pull-request@v5
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          types: ${{ inputs.types }}
-          requireScope: ${{ inputs.require-scope }}
-          subjectPattern: ^(?![A-Z]).+$
-          subjectPatternError: |
-            The subject "{subject}" must start with a lowercase letter.
-
-  commits:
-    name: Conventional commits
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 20
-      - name: Install commitlint
-        run: npm install --no-save @commitlint/cli @commitlint/config-conventional
-      - name: Lint commits in range
-        run: npx commitlint --from "${{ github.event.pull_request.base.sha }}" --to "${{ github.event.pull_request.head.sha }}" --verbose
+  lint:
+    uses: OneLiteFeatherNET/workflows/.github/workflows/pr-lint.yml@v2.8.1
+    secrets: inherit
