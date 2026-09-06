@@ -63,6 +63,12 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 20
+          # setup-node turns its package-manager cache on by default and infers
+          # the manager from the calling repo's lockfile. In a pnpm repo it then
+          # shells out to pnpm, which this job never installs, and the step dies
+          # with "Unable to locate executable file: pnpm". commitlint is
+          # installed with npm below, so there is nothing worth caching here.
+          package-manager-cache: false
       - name: Install commitlint
         run: npm install --no-save @commitlint/cli @commitlint/config-conventional
       - name: Lint commits in range
