@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.8.2](https://github.com/OneLiteFeatherNET/workflows/compare/v2.8.1...v2.8.2) (2026-09-06)
+
+
+### Bug Fixes
+
+* **pr-lint:** stop setup-node reaching for pnpm it never installed ([#32](https://github.com/OneLiteFeatherNET/workflows/issues/32)) ([60a1533](https://github.com/OneLiteFeatherNET/workflows/commit/60a1533602f188399e129800fb8981495c978f3c))
+
 ## [2.8.1](https://github.com/OneLiteFeatherNET/workflows/compare/v2.8.0...v2.8.1) (2026-08-15)
 
 
