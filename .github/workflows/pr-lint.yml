@@ -69,7 +69,17 @@ jobs:
           # with "Unable to locate executable file: pnpm". commitlint is
           # installed with npm below, so there is nothing worth caching here.
           package-manager-cache: false
+      # Installed outside the checkout on purpose. `npm install` inside the
+      # calling repository resolves that repository's whole dependency tree,
+      # which fails in any pnpm repo whose peer conflicts are settled through
+      # pnpm-only `overrides` - npm never sees those and gives up. Older npm
+      # crashes outright with "Cannot read properties of null (reading
+      # 'edgesOut')" instead of reporting the conflict.
       - name: Install commitlint
+        working-directory: ${{ runner.temp }}
         run: npm install --no-save @commitlint/cli @commitlint/config-conventional
+      # Runs with the repository as cwd so commitlint picks up its
+      # commitlint.config.*, while `extends` resolves against the CLI's own
+      # node_modules next to it in RUNNER_TEMP.
       - name: Lint commits in range
-        run: npx commitlint --from "${{ github.event.pull_request.base.sha }}" --to "${{ github.event.pull_request.head.sha }}" --verbose
+        run: node "$RUNNER_TEMP/node_modules/.bin/commitlint" --from "${{ github.event.pull_request.base.sha }}" --to "${{ github.event.pull_request.head.sha }}" --verbose
