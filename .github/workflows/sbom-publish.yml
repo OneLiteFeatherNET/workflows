@@ -97,7 +97,7 @@ jobs:
       # scan and checking out would just cost time.
       - name: Checkout
         if: ${{ inputs.artifact-name == '' }}
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Prepare SBOM directory
         shell: bash
@@ -105,7 +105,7 @@ jobs:
 
       - name: Download SBOM artifact
         if: ${{ inputs.artifact-name != '' }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.artifact-name }}
           path: sbom
@@ -169,7 +169,7 @@ jobs:
 
       - name: Upload SBOM artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sbom-${{ inputs.project-name }}-${{ inputs.project-version }}
           path: sbom/**
