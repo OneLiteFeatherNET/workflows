@@ -53,7 +53,7 @@ jobs:
       GRADLE_OPTS: "-Dorg.gradle.parallel=true -Dorg.gradle.caching=true -Dorg.gradle.welcome=never"
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Toolchain info
         shell: bash
@@ -69,7 +69,7 @@ jobs:
         uses: gradle/actions/wrapper-validation@v6
 
       - name: Set up JDK ${{ inputs.java-version }}
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           distribution: ${{ inputs.java-distribution }}
           java-version: ${{ inputs.java-version }}
@@ -99,7 +99,7 @@ jobs:
 
       - name: Upload build reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: publish-reports-jdk${{ inputs.java-version }}
           path: |

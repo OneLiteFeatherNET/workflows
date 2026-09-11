@@ -200,7 +200,7 @@ jobs:
 ```
 
 | Output | Description |
-|---|---|
+| --- | --- |
 | `release_created` | `'true'` when the root package was released. |
 | `releases_created` | `'true'` when at least one release was created - use this on a multi-package manifest. |
 | `tag_name` | Tag of the root package's release, e.g. `v1.2.3`. Empty when it was not released. |

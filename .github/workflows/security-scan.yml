@@ -109,13 +109,13 @@ jobs:
     steps:
       - name: Checkout
         if: ${{ inputs.scan-type != 'image' && inputs.artifact-name == '' }}
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
 
       - name: Download artifact to scan
         if: ${{ inputs.artifact-name != '' }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.artifact-name }}
           path: ${{ inputs.artifact-path }}
@@ -201,7 +201,7 @@ jobs:
 
       - name: Upload SARIF artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: trivy-sarif-${{ inputs.scan-type }}
           path: trivy-results.sarif
