@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.9.0](https://github.com/OneLiteFeatherNET/workflows/compare/v2.8.2...v2.9.0) (2026-09-11)
+
+
+### Features
+
+* **release-please:** let callers open the release PR as a GitHub App ([#35](https://github.com/OneLiteFeatherNET/workflows/issues/35)) ([70e7c0f](https://github.com/OneLiteFeatherNET/workflows/commit/70e7c0ff4a80ec62b65773a109fcb89c6dba2b48))
+
 ## [2.8.2](https://github.com/OneLiteFeatherNET/workflows/compare/v2.8.1...v2.8.2) (2026-09-06)
 
 
