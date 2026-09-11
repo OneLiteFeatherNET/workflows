@@ -213,6 +213,42 @@ On a multi-package manifest the action exposes per-package values as `<path>--re
 and friends. Those names are not fixed, so a reusable workflow cannot declare them - gate on
 `releases_created` and read `paths_released` instead.
 
+#### Opening the release PR as a GitHub App
+
+A pull request opened with the default `GITHUB_TOKEN` starts **no** workflow runs - the loop
+guard that keeps a workflow from triggering itself. If the repository's branch ruleset requires
+status checks, the release PR arrives without them and nothing will ever make them run: it stays
+unmergeable and the repository quietly stops releasing.
+
+Give the workflow a GitHub App and the release PR becomes an ordinary PR that `pull_request`
+workflows pick up:
+
+```yaml
+jobs:
+  release-please:
+    uses: OneLiteFeatherNET/workflows/.github/workflows/release-please.yml@v2
+    secrets: inherit   # or map RELEASE_APP_ID / RELEASE_APP_PRIVATE_KEY explicitly
+```
+
+| Secret | Purpose |
+| --- | --- |
+| `RELEASE_APP_ID` | App ID of the release GitHub App. Optional. |
+| `RELEASE_APP_PRIVATE_KEY` | That App's private key (PEM). Optional. |
+
+Both are optional and only take effect together. Leave them out - as every caller did before
+this existed - and the workflow runs on `GITHUB_TOKEN` exactly as it always has; `secrets:
+inherit` passes a secret the repository never defined as an empty string, which the workflow
+treats as "no App".
+
+The App needs `contents: write` and `pull_requests: write` on the repository, and a ruleset
+bypass if the ruleset forbids the release PR's own commits.
+
+> Two things change once the App is in use. The release PR is authored by the App rather than
+> `github-actions[bot]`, so anything keyed on the author (auto-merge rules, CODEOWNERS,
+> notifications) has to know the new name. And the release tag is pushed with the App token, so a
+> `on: push: tags` workflow now **does** fire - if a release job is already chained via
+> `needs`/`if` for the reason above, check it does not now run a second time from the tag.
+
 ### Close invalid PRs
 
 ```yaml
