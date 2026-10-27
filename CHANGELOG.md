@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.9.1](https://github.com/OneLiteFeatherNET/workflows/compare/v2.9.0...v2.9.1) (2026-10-27)
+
+
+### Bug Fixes
+
+* **pr-lint:** install commitlint outside the caller's project ([#39](https://github.com/OneLiteFeatherNET/workflows/issues/39)) ([a6a3b70](https://github.com/OneLiteFeatherNET/workflows/commit/a6a3b70a62b0c857117df23709f2e24cc13d0a72))
+
 ## [2.9.0](https://github.com/OneLiteFeatherNET/workflows/compare/v2.8.2...v2.9.0) (2026-09-11)
 
 
