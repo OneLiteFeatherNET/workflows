@@ -31,6 +31,11 @@ on:
         required: false
       RELEASE_APP_PRIVATE_KEY:
         required: false
+      # Org-wide release bot secrets; take precedence over the two above when both are set.
+      RELEASE_PLEASE_APP_CLIENT_ID:
+        required: false
+      RELEASE_PLEASE_APP_PRIVATE_KEY:
+        required: false
     outputs:
       release_created:
         description: "'true' when the root package was released. Gate a publish or docker job on this. Only set for the root package - on a multi-package manifest other paths are exposed by the action as '<path>--release_created', which a reusable workflow cannot forward."
@@ -78,8 +83,8 @@ jobs:
       # available in the `if` of the step that declares it, and the `secrets` context cannot be
       # used in a job-level `if` at all. Same trick resourcepack-publish.yml uses for its
       # optional Discord webhook.
-      RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}
-      RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      RELEASE_APP_ID: ${{ secrets.RELEASE_PLEASE_APP_CLIENT_ID || secrets.RELEASE_APP_ID }}
+      RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY || secrets.RELEASE_APP_PRIVATE_KEY }}
     steps:
       # Why an App token at all: GitHub starts no workflow runs for a pull request opened with
       # the default GITHUB_TOKEN - the loop guard that stops a workflow from triggering itself.
@@ -96,8 +101,8 @@ jobs:
         if: env.RELEASE_APP_ID != '' && env.RELEASE_APP_PRIVATE_KEY != ''
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.RELEASE_APP_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          client-id: ${{ env.RELEASE_APP_ID }}
+          private-key: ${{ env.RELEASE_APP_PRIVATE_KEY }}
 
       - name: Run release-please
         id: release

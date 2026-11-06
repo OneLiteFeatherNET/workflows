@@ -232,10 +232,12 @@ jobs:
 
 | Secret | Purpose |
 | --- | --- |
-| `RELEASE_APP_ID` | App ID of the release GitHub App. Optional. |
-| `RELEASE_APP_PRIVATE_KEY` | That App's private key (PEM). Optional. |
+| `RELEASE_PLEASE_APP_CLIENT_ID` | Client ID of the release GitHub App. Optional. The org-wide release bot secret; used first when set. |
+| `RELEASE_PLEASE_APP_PRIVATE_KEY` | That App's private key (PEM). Optional. |
+| `RELEASE_APP_ID` | Legacy name for the App ID, used when the org-wide secret is absent. Optional. |
+| `RELEASE_APP_PRIVATE_KEY` | Legacy name for the private key. Optional. |
 
-Both are optional and only take effect together. Leave them out - as every caller did before
+Each pair is optional and only takes effect together. Leave them out - as every caller did before
 this existed - and the workflow runs on `GITHUB_TOKEN` exactly as it always has; `secrets:
 inherit` passes a secret the repository never defined as an empty string, which the workflow
 treats as "no App".
